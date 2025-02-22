@@ -2,21 +2,8 @@
 using namespace std;
 using namespace chrono;
 
-/*
-
-_________________________________________________________________________________________________________
-
-This is the C++ implementation of CNN. It's significantly faster than Python.
-
-This is entirely for learning purposes. There is no emphasis on accuracy or optimisation. Implementation
-of CNN from scratch without resorting to any library such as PyTorch or Tensorflow is the aim here.
-
-_________________________________________________________________________________________________________
-
-*/
-
 mt19937 rng(steady_clock::now().time_since_epoch().count());
-normal_distribution dist(0.0, .01);
+normal_distribution normal_dist(0.0, .01);
 
 // Cross-Entropy Loss function
 double cross_entropy_loss(const vector<vector<double>>& predictions, const vector<int>& labels) {
@@ -79,23 +66,35 @@ public:
     pair<int, int> kernel_size;  // Kernel size (3x3)
     vector<vector<vector<vector<double>>>> weights;  // Filters, each of size 3x3
     vector<double> biases;  // Bias for each filter
+    string initializer;
 
     Conv2d() {
 
     }
 
-    Conv2d(const int input_channels, const int output_channels, const auto kernel_size={3, 3}) : input_channels(input_channels), output_channels(output_channels), kernel_size(kernel_size) {
-        weights = vector(output_channels, vector(input_channels, vector(kernel_size.first, vector<double>(kernel_size.second))));
-        biases = vector(output_channels, .1);
+    Conv2d(const int input_channels, const int output_channels, const auto kernel_size={3, 3}, const string& initializer = "glorot") :
+    input_channels(input_channels), output_channels(output_channels), kernel_size(kernel_size), initializer(initializer) {
 
-        for(auto& tensor: weights) {
-            for(auto& matrix: tensor) {
-                for(auto& row: matrix) {
-                    for(auto& val: row) {
-                        val = dist(rng);
-                    }
-                }
-            }
+        weights = vector(output_channels, vector(input_channels, vector(kernel_size.first, vector<double>(kernel_size.second))));
+        biases = vector<double>(output_channels);
+
+        if(initializer == "glorot") {
+            const double limit = sqrt(6.0f / static_cast<float>(input_channels + output_channels));
+            const uniform_real_distribution dist(-limit, limit);
+
+            initializeWeights(dist);
+            initializeBiases(dist);
+        }
+        else if(initializer == "he") {
+            const double limit = sqrt(6.0f / static_cast<float>(input_channels));
+            const uniform_real_distribution dist(-limit, limit);
+
+            initializeWeights(dist);
+            initializeBiases(dist);
+        }
+        else {
+            initializeWeights(normal_dist);
+            initializeBiases(normal_dist);
         }
     }
 
@@ -121,6 +120,18 @@ public:
             for(int h = 0; h < output_height; h++) {
                 for(int w = 0; w < output_width; w++) {
                     for(int oc = 0; oc < output_channels; oc++) {
+
+
+                        /*
+
+                        For each position of the kernel on the input channels, the output for that particular position is the sum of
+                        elementwise multiplication for all input channels. The kernel starts to slide over the input from [0, 0].
+                        If there are 32 input channels, the output will be calculated as the sum of the hadamard product when kernel
+                        is placed on the same position for all 32 channels.
+
+                        */
+
+
                         double sum_value = 0.0;
 
                         for(int ic = 0; ic < input_channels; ic++) {
@@ -133,7 +144,7 @@ public:
                                 }
                             }
                         }
-                        output[i][h][w][oc] = max(0.0, sum_value) + biases[oc];
+                        output[i][h][w][oc] = sum_value + biases[oc];
                     }
                 }
             }
@@ -142,11 +153,14 @@ public:
         relu_mask = vector(batch_size, vector(output_height, vector(output_width, vector<bool>(output_channels))));
 
         for(int i = 0; i < batch_size; i++) {
-            for(int j = 0; j < output_height; j++) {
-                for(int k = 0; k < output_width; k++) {
-                    for(int l = 0; l < output_channels; l++) {
-                        relu_mask[i][j][k][l] = output[i][j][k][l] > 0;
-                        output[i][j][k][l] = max(0.0, output[i][j][k][l]);
+            for(int h = 0; h < output_height; h++) {
+                for(int w = 0; w < output_width; w++) {
+                    for(int oc = 0; oc < output_channels; oc++) {
+                        // Mark the output positions for which ReLU produced 0
+                        relu_mask[i][h][w][oc] = output[i][h][w][oc] > 0;
+
+                        // ReLU
+                        output[i][h][w][oc] = max(0.0, output[i][h][w][oc]);
                     }
                 }
             }
@@ -165,31 +179,81 @@ public:
         const int kernel_height = kernel_size.first;
         const int kernel_width = kernel_size.second;
 
+        // Gradients of all the weights of this layer
         auto dL_dweights = vector(output_channels, vector(input_channels, vector(kernel_size.first, vector<double>(kernel_size.second, 0))));
-        auto dL_dbiases = vector<double>(output_channels, 0);
+
+        // Gradients of all the biases
+        auto dL_dbiases = vector<double>(output_channels);
+
+        // Gradients w.r.t. the inputs of this layer which will be used to calculate the gradients of the previous layer unless it's the first layer
         auto dL_din = vector(batch_size, vector(input_height, vector(input_width, vector<double>(input_channels, 0))));
 
         for(int i = 0; i < batch_size; i++) {
-            for(int j = 0; j < dL_dout[0].size(); j++) {
-                for(int k = 0; k < dL_dout[0][0].size(); k++) {
-                    for(int l = 0; l < output_channels; l++) {
-                        dL_dout[i][j][k][l] *= relu_mask[i][j][k][l] ? 1 : 0;
+            for(int h = 0; h < dL_dout[0].size(); h++) {
+                for(int w = 0; w < dL_dout[0][0].size(); w++) {
+                    for(int oc = 0; oc < output_channels; oc++) {
+                        // If ReLU produced 0 during forward pass for an output, its gradient will not be counted
+                        dL_dout[i][h][w][oc] *= relu_mask[i][h][w][oc] ? 1 : 0;
                     }
                 }
             }
         }
 
+        /*
+
+        First loop goes through all the images in the batch
+        Second loop goes through the rows of the activation maps of this layer
+        Third loop goes through the columns of the activation maps of this layer
+        Fourth loop goes through the output channels of this layer
+        Fifth loop goes through the input channels of this layer
+        Sixth and Seventh loops go through the kernel height and width respectively
+
+        */
+
         for(int i = 0; i < batch_size; i++) {
             for(int h = 0; h < dL_dout[0].size(); h++) {
                 for(int w  = 0; w < dL_dout[0][0].size(); w++) {
                     for(int oc = 0; oc < output_channels; oc++) {
+
+                        /*
+
+                        The bias value of a neuron was used to calculate all the output values of an activation map.
+                        Therefore, its gradient is calculated by summing the gradients of all the output values.
+
+                        */
+
                         dL_dbiases[oc] += dL_dout[i][h][w][oc];
 
                         for(int ic = 0; ic < input_channels; ic++) {
                             for(int kh = 0; kh < kernel_height; kh++) {
                                 for(int kw = 0; kw < kernel_width; kw++) {
                                     const double input_value = input[i][h + kh][w + kw][ic];
+
+                                    /*
+
+                                    During forward pass kernel slid over all the possible positions of the input channels.
+
+                                    Therefore, the gradient of a weight (dL_dweights[oc][ic][kh][kw]) will be calculated using the gradients of all
+                                    the outputs that were calculated using this weight and its corresponding input value
+
+                                    In other words, the gradient of a particular output position (dL_dout[i][h][w][oc]) will be used to calculate the
+                                    gradients of all the weights that were used to calculate this particular output position
+
+                                    */
+
                                     dL_dweights[oc][ic][kh][kw] += input_value * dL_dout[i][h][w][oc];
+
+
+                                    /*
+
+                                    Similarly, the gradient of a particular input position (dL_din[i][h + kh][w + kw][ic]) will be calculated using the
+                                    weight (weights[oc][ic][kh][kw]) associated with that input position and the gradient of the output position which
+                                    was calculated using this input value
+
+                                    In other words, gradient of every output value (dL_dout[i][h][w][oc]) will be used to calculate the gradient of all
+                                    the input values that were used to calculate this output value
+
+                                    */
 
                                     dL_din[i][h + kh][w + kw][ic] += weights[oc][ic][kh][kw] * dL_dout[i][h][w][oc];
                                 }
@@ -213,6 +277,24 @@ public:
 
         return dL_din;  // Pass gradient to the previous layer
     }
+
+private:
+    void initializeWeights(auto dist) {
+        for(auto& tensor: weights) {
+            for(auto& matrix: tensor) {
+                for(auto& row: matrix) {
+                    for(auto& val: row) {
+                        val = dist(rng);
+                    }
+                }
+            }
+        }
+    }
+    void initializeBiases(auto dist) {
+        for(auto& val: biases) {
+            val = dist(rng);
+        }
+    }
 };
 
 class Dense {
@@ -224,15 +306,31 @@ public:
     string activation;
     vector<vector<double>> weights;
     vector<double> biases;
+    string initializer;
 
-    Dense(const int input_channels, const int output_channels, string activation) : input_channels(input_channels), output_channels(output_channels), activation(activation) {
+    Dense(const int input_channels, const int output_channels, const string activation, const string& initializer = "glorot") :
+    input_channels(input_channels), output_channels(output_channels), activation(activation), initializer(initializer) {
+
         weights = vector(input_channels, vector<double>(output_channels));
-        biases = vector(output_channels, .1);
+        biases = vector<double>(output_channels);
 
-        for(auto& row: weights) {
-            for(auto& val: row) {
-                val = dist(rng);
-            }
+        if(initializer == "glorot") {
+            const double limit = sqrt(6.0f / static_cast<float>(input_channels + output_channels));
+            const uniform_real_distribution dist(-limit, limit);
+
+            initializeWeights(dist);
+            initializeBiases(dist);
+        }
+        else if(initializer == "he") {
+            const double limit = sqrt(6.0f / static_cast<float>(input_channels));
+            const uniform_real_distribution dist(-limit, limit);
+
+            initializeWeights(dist);
+            initializeBiases(dist);
+        }
+        else {
+            initializeWeights(normal_dist);
+            initializeBiases(normal_dist);
         }
     }
 
@@ -326,6 +424,21 @@ private:
         }
         return result;
     }
+
+    void initializeWeights(auto dist) {
+
+        for(auto& row: weights) {
+            for(auto& val: row) {
+                val = dist(rng);
+            }
+        }
+    }
+
+    void initializeBiases(auto dist) {
+        for(auto& val: biases) {
+            val = dist(rng);
+        }
+    }
 };
 
 class MaxPooling2D: public ConvPool {
@@ -417,7 +530,8 @@ public:
         dense_layers.push_back(dense_layer);
     }
 
-    vector<vector<double>> fit(const int epochs, const vector<vector<vector<vector<double>>>>& input_images, const vector<int>& labels, const int batch_size, double learning_rate) {
+    vector<vector<double>> fit(const int epochs, const vector<vector<vector<vector<double>>>>& input_images,
+                                const vector<int>& labels, const int batch_size, const double learning_rate) {
 
         for(int epoch = 1; epoch <= epochs; epoch++) {
 
@@ -425,7 +539,7 @@ public:
 
             for(int i = 0; i < input_images.size(); i++) {
                 const int start_index = i * batch_size;
-                int end_index = min(start_index + batch_size, static_cast<int>(input_images.size()));
+                const int end_index = min(start_index + batch_size, static_cast<int>(input_images.size()));
                 if(start_index >= input_images.size())
                     break;
 
@@ -435,11 +549,13 @@ public:
                 total_loss += cross_entropy_loss(batch_predictions, vector(labels.begin() + start_index, labels.begin() + end_index)) * (end_index - start_index + 1);
             }
 
-            if(epoch % 10 == 1 || epoch == epochs) {
+            if(epoch == 1 || epoch % 10 == 0 || epoch == epochs) {
                 printf("Epoch = %02d    Loss: %.5lf\n", epoch, total_loss / input_images.size());
-                // cout << "Epoch = " << epoch << "     Loss: " << total_loss / input_images.size() << "\n";
             }
         }
+        cout << "\n";
+
+        cout << "Predictions\n";
 
         auto predictions = forward(input_images);
 
@@ -449,6 +565,7 @@ public:
             }
             cout << "\n";
         }
+        cout << "\n";
 
         return predictions;
     }
@@ -541,13 +658,13 @@ private:
 
 int main() {
 
-    int width = 20;
-    int height = 20;
-    int channels = 1;
+    int width = 64;
+    int height = 64;
+    int channels = 3;
 
     int totalImages = 10;
     int classes = 5;
-    int epochs = 50;
+    int epochs = 30;
     int batch_size = 32;
 
     vector<vector<vector<vector<double>>>> images = vector(totalImages, vector(height, vector(width, vector<double>(channels))));
@@ -566,13 +683,13 @@ int main() {
             }
         }
     }
-    // labels = {3, 1, 4, 2, 0};
+    // labels = {3, 1, 4, 2, 0, 1, 4, 3, 2, 0};
 
     Sequential model;
 
     int trainable_parameters = 0;
 
-    vector num_output_channels = {16, -1, 32, -1, 64};
+    vector num_output_channels = {16, -1, 32, -1, 64, -1, 64};
 
     int current_height = height;
     int current_width = width;

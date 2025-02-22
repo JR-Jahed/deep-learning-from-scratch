@@ -42,16 +42,29 @@ def cross_entropy_gradient(predictions, labels):
 
 
 class Conv2d:
-    def __init__(self, input_channels, output_channels, kernel_size = (3, 3)):
+    def __init__(self, input_channels, output_channels, kernel_size = (3, 3), initializer = "glorot"):
         self.input = None
         self.relu_mask = None
         self.input_channels = input_channels
         self.output_channels = output_channels  # Number of filters
         self.kernel_size = kernel_size
+        self.initializer = initializer
 
-        # Initialize kernels (filters) and biases
-        self.weights = np.random.normal(0.0, 0.01, (self.output_channels, self.input_channels, self.kernel_size[0], self.kernel_size[1]))
-        self.biases = np.zeros(output_channels)
+
+        if initializer == "glorot":
+            # Glorot (Xavier) Uniform Initialization
+            limit = np.sqrt(6.0 / (input_channels + output_channels))
+            self.weights = np.random.uniform(-limit, limit, (output_channels, input_channels, kernel_size[0], kernel_size[1]))
+            self.biases = np.random.uniform(-limit, limit, output_channels)
+        elif initializer == "he":
+            # He Uniform Initialization
+            limit = np.sqrt(6.0 / input_channels)
+            self.weights = np.random.uniform(-limit, limit, (output_channels, input_channels, kernel_size[0], kernel_size[1]))
+            self.biases = np.random.uniform(-limit, limit, output_channels)
+        else:
+            # Initialize kernels (filters) and biases
+            self.weights = np.random.normal(0.0, 0.01, (output_channels, input_channels, kernel_size[0], kernel_size[1]))
+            self.biases = np.random.normal(0.0, 0.01, output_channels)
 
 
     def forward(self, input):
@@ -76,7 +89,16 @@ class Conv2d:
                         # Initialize the sum for this particular output location
                         sum_value = 0.0
 
-                        # Loop through the input channels (RGB for example)
+
+                        """
+
+                        For each position of the kernel on the input channels, the output for that particular position is the sum of
+                        elementwise multiplication for all input channels. The kernel starts to slide over the input from [0, 0].
+                        If there are 32 input channels, the output will be calculated as the sum of the hadamard product when kernel
+                        is placed on the same position for all 32 channels.
+
+                        """
+
                         for ic in range(input_channels):   # Loop over each input channel
                             # Extract the region of the input image that corresponds to the filter
                             for kh in range(kernel_height):   # Loop over the kernel height
@@ -93,7 +115,6 @@ class Conv2d:
         output = np.maximum(0, output)  # Apply ReLU
         return output
 
-
     def backward(self, dL_dout, learning_rate):
 
         batch_size, input_height, input_width, input_channels = self.input.shape
@@ -107,12 +128,30 @@ class Conv2d:
         # Apply ReLU mask to dL_dout
         dL_dout *= self.relu_mask
 
+        """
+
+        First loop goes through all the images in the batch
+        Second loop goes through the rows of the activation maps of this layer
+        Third loop goes through the columns of the activation maps of this layer
+        Fourth loop goes through the output channels of this layer
+        Fifth loop goes through the input channels of this layer
+        Sixth and Seventh loops go through the kernel height and width respectively
+
+        """
+
         # Calculate gradients for weights, biases, and input
         for i in range(batch_size):
-            for h in range(dL_dout.shape[1]):   # Output height
-                for w in range(dL_dout.shape[2]):   # Output width
-                    for oc in range(self.output_channels):   #Output channels
-                        # Gradient w.r.t. the bias (sum over all positions)
+            for h in range(dL_dout.shape[1]):  # Output height
+                for w in range(dL_dout.shape[2]):  # Output width
+                    for oc in range(self.output_channels):  # Output channels
+
+                        """
+
+                        The bias value of a neuron was used to calculate all the output values of an activation map.
+                        Therefore, its gradient is calculated by summing the gradients of all the output values.
+
+                        """
+
                         dL_dbiases[oc] += dL_dout[i, h, w, oc]
 
                         # Gradient w.r.t. the weights (input region * output gradient)
@@ -120,9 +159,32 @@ class Conv2d:
                             for kh in range(kernel_height):
                                 for kw in range(kernel_width):
                                     input_value = self.input[i, h + kh, w + kw, ic]
+
+                                    """
+
+                                    During forward pass kernel slid over all the possible positions of the input channels.
+
+                                    Therefore, the gradient of a weight (dL_dweights[oc][ic][kh][kw]) will be calculated using the gradients of all
+                                    the outputs that were calculated using this weight and its corresponding input value
+
+                                    In other words, the gradient of a particular output position (dL_dout[i][h][w][oc]) will be used to calculate the
+                                    gradients of all the weights that were used to calculate this particular output position
+
+                                    """
+
                                     dL_dweights[oc, ic, kh, kw] += input_value * dL_dout[i, h, w, oc]
 
-                                    # Gradient w.r.t. the input (reverse the convolution)
+                                    """
+
+                                    Similarly, the gradient of a particular input position (dL_din[i][h + kh][w + kw][ic]) will be calculated using the
+                                    weight (weights[oc][ic][kh][kw]) associated with that input position and the gradient of the output position which
+                                    was calculated using this input value
+
+                                    In other words, gradient of every output value (dL_dout[i][h][w][oc]) will be used to calculate the gradient of all
+                                    the input values that were used to calculate this output value
+
+                                    """
+
                                     dL_din[i, h + kh, w + kw, ic] += self.weights[oc, ic, kh, kw] * dL_dout[i, h, w, oc]
 
         # Update the weights and biases
@@ -132,14 +194,25 @@ class Conv2d:
 
 
 class Dense:
-    def __init__(self, input_channels, output_channels, activation):
+    def __init__(self, input_channels, output_channels, activation, initializer="glorot"):
         self.z = None
         self.input = None
         self.input_channels = input_channels
         self.output_channels = output_channels
         self.activation = activation
-        self.weights = np.random.normal(0.0, .01, (input_channels, output_channels))  # Randomly initialized weights
-        self.biases = np.zeros(output_channels)
+        self.initializer = initializer
+
+        if initializer == "glorot":
+            limit = np.sqrt(6.0 / (input_channels + output_channels))
+            self.weights = np.random.uniform(-limit, limit, (input_channels, output_channels))
+            self.biases = np.random.uniform(-limit, limit, output_channels)
+        elif initializer == "he":
+            limit = np.sqrt(6.0 / input_channels)
+            self.weights = np.random.uniform(-limit, limit, (input_channels, output_channels))
+            self.biases = np.random.uniform(-limit, limit, output_channels)
+        else:
+            self.weights = np.random.normal(0.0, .01, (input_channels, output_channels))  # Randomly initialized weights
+            self.biases = np.random.normal(0.0, .01, output_channels)
 
 
     def forward(self, input):
@@ -286,13 +359,18 @@ class Sequential:
 
             sys.stdout = original_stdout
 
-            if epoch % 10 == 1 or epoch == epochs:
+            if epoch == 1 or epoch % 10 == 0 or epoch == epochs:
                 print(f"Epoch = {epoch:02}     Loss: {total_loss / len(input_images)}")
+
+        print("\n")
+        print("Predictions\n")
 
         predictions = self.forward(input_images)
 
         for prediction in predictions:
             print(*[f"{num:.12f}" for num in prediction])
+
+        print("\n")
 
         return predictions
 
@@ -357,13 +435,13 @@ class Sequential:
 if __name__ == "__main__":
 
     np.set_printoptions(formatter={'float_kind': lambda x: f'{x:.7f}'})
-    width = 20
-    height = 20
-    channels = 1
+    width = 32
+    height = 32
+    channels = 3
 
     total_images = 10
     classes = 5
-    epochs = 20
+    epochs = 30
     batch_size = 32
 
     # Create a 4x4 image with random pixel values between 0 and 1
@@ -372,7 +450,7 @@ if __name__ == "__main__":
 
     # Label for the image
     labels = np.random.randint(0, classes, total_images)
-    # labels = np.array([3, 1, 4, 2, 0])
+    # labels = np.array([3, 1, 4, 2, 0, 1, 4, 3, 2, 0])
     # labels = np.array([3, 3, 3, 3, 3])
 
     model = Sequential()
@@ -434,6 +512,6 @@ if __name__ == "__main__":
         if predicted_label == correct_label:
             correct_prediction += 1
 
-    print(correct_prediction)
-    print("Total time = ", end_time - start_time)
+    print(f"Correct prediction = {correct_prediction}")
 
+    print(f"Total time = {end_time - start_time} seconds")
