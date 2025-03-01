@@ -2,6 +2,23 @@
 using namespace std;
 using namespace chrono;
 
+/*
+
+_________________________________________________________________________________________________________
+
+This is the C++ implementation of CNN. It's significantly faster than Python.
+
+IDE: CLion (Downloaded using my Queen's email)
+
+
+This is entirely for learning. There is no emphasis on accuracy or optimisation. Implementation
+of CNN from scratch without resorting to any library such as PyTorch or Tensorflow is the aim here.
+
+_________________________________________________________________________________________________________
+
+*/
+
+
 mt19937 rng(steady_clock::now().time_since_epoch().count());
 normal_distribution normal_dist(0.0, .01);
 
@@ -299,7 +316,6 @@ private:
 
 class Dense {
 public:
-    vector<vector<double>> z;
     vector<vector<double>> input;
     int input_channels;
     int output_channels;
@@ -350,7 +366,6 @@ public:
             }
             output.emplace_back(row_output);
         }
-        z = output;
 
         output = activation_function(output);
         return output;

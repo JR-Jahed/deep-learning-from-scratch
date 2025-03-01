@@ -7,7 +7,12 @@ import os
 
 _________________________________________________________________________________________________________
 
-This is entirely for learning purposes. There is no emphasis on accuracy or optimisation. Implementation
+This is the Python implementation of CNN.
+
+IDE: PyCharm Professional (Downloaded using my Queen's email)
+
+
+This is entirely for learning. There is no emphasis on accuracy or optimisation. Implementation
 of CNN from scratch without resorting to any library such as PyTorch or Tensorflow is the aim here.
 
 _________________________________________________________________________________________________________
@@ -69,6 +74,14 @@ class Conv2d:
 
     def forward(self, input):
 
+        """
+        @Params
+        input: A 4D numpy array (batch_size, input_height, input_width, input_channels)
+
+        @Return
+        output: A 4D numpy array (batch_size, input_height, input_width, output_channels)
+        """
+
         # Save input for backpropagation
         self.input = input
 
@@ -116,6 +129,15 @@ class Conv2d:
         return output
 
     def backward(self, dL_dout, learning_rate):
+
+        """
+        @Params
+        dL_dout: A 4D numpy array of shape (batch_size, output_height, output_width, output_channels)
+        learning_rate: A float
+
+        @Return
+        dL_din: A 4D numpy array of shape (batch_size, input_height, input_width, input_channels)
+        """
 
         batch_size, input_height, input_width, input_channels = self.input.shape
         kernel_height, kernel_width = self.kernel_size
@@ -195,7 +217,6 @@ class Conv2d:
 
 class Dense:
     def __init__(self, input_channels, output_channels, activation, initializer="glorot"):
-        self.z = None
         self.input = None
         self.input_channels = input_channels
         self.output_channels = output_channels
@@ -216,6 +237,15 @@ class Dense:
 
 
     def forward(self, input):
+        """
+        @Params
+        input: A 2D numpy array of shape (batch_size, input_channels)
+
+        @Return
+        output: A 2D numpy array of shape (batch_size, output_channels).
+        """
+
+        # Save input for backpropagation
         self.input = input
         output = []
 
@@ -224,11 +254,20 @@ class Dense:
             output.append(row_output)
 
         output = np.array(output)
-        self.z = output
         output = self.activation_function(output)
         return output
 
     def backward(self, dL_dout, learning_rate):
+
+        """
+        @Params
+        dL_dout: A 2D numpy array of shape (batch_size, output_channels)
+        learning_rate: A float
+
+        @Return
+        dL_din: A 2D numpy array of shape (batch_size, input_channels)
+        """
+
         batch_size = self.input.shape[0]
         dL_din = np.zeros_like(self.input)  # Gradient w.r.t. input
         dL_dweights = np.zeros_like(self.weights)  # Gradient w.r.t. weights
@@ -239,7 +278,10 @@ class Dense:
             for oc in range(self.output_channels):
                 dL_dbiases[oc] += dL_dout[i][oc]
                 for ic in range(self.input.shape[1]):
+                    # Calculate gradients of weights
                     dL_dweights[ic][oc] += dL_dout[i][oc] * self.input[i][ic]
+
+                    # Calculate gradients of inputs (outputs of the previous layer) to this layer
                     dL_din[i][ic] += self.weights[ic][oc] * dL_dout[i][oc]
 
         dL_dweights /= batch_size
@@ -250,7 +292,6 @@ class Dense:
             for ic in range(self.input.shape[1]):
                 self.weights[ic][oc] -= learning_rate * dL_dweights[ic][oc]
         return dL_din  # Pass gradient to the previous layer
-
 
 
     def activation_function(self, values):
@@ -275,8 +316,11 @@ class MaxPooling2D:
 
     def forward(self, input):
         """
-        :param input: is a 4D numpy array of shape  (batch_size, height, width, channel)
-        :return: a 4D numpy array  (batch_size, height / 2, width / 2, channel)
+        @Param
+        input: is a 4D numpy array of shape  (batch_size, height, width, channels)
+
+        @Return
+        output: a 4D numpy array  (batch_size, height / 2, width / 2, channels)
         """
 
         # Save input for backpropagation
@@ -304,6 +348,14 @@ class MaxPooling2D:
 
 
     def backward(self, dL_dout, learning_rate):
+
+        """
+        @Param
+        dL_dout: A 4D numpy array of shape (batch_size, output_height, output_width, channels)
+
+        @Return
+        dL_din: A 4D numpy array of shape (batch_size, input_height, input_width, channels)
+        """
 
         batch_size, input_height, input_width, input_channels = self.input.shape
 
@@ -388,6 +440,7 @@ class Sequential:
         self.last_conv_output_shape = current_input.shape
 
         # Flatten the output from the last convolutional layer
+        # There should be one row for each image in the batch
         flat_input = [self.flatten(tensor) for tensor in current_input]
 
         # Forward pass through dense layers
@@ -439,9 +492,9 @@ if __name__ == "__main__":
     height = 32
     channels = 3
 
-    total_images = 10
+    total_images = 1
     classes = 5
-    epochs = 30
+    epochs = 1
     batch_size = 32
 
     # Create a 4x4 image with random pixel values between 0 and 1
@@ -492,6 +545,8 @@ if __name__ == "__main__":
 
     original_stdout = sys.stdout
     # Disable print
+    # Was printing in many places to debug while implementing. It became tedious to enable and disable at all these different places.
+    # This one line disables all the subsequent print statements
     # sys.stdout = open(os.devnull, 'w')
 
     start_time = time.time()

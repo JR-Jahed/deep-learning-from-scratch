@@ -1,8 +1,12 @@
-#### Let's play with convolutional neural network here
+#### Let's play with the fundamental concepts of deep learning here
 
-# CNN from scratch
+# Convolutional Neural Network (CNN)
 
 Implemented CNN from scratch in C++ and Python
+
+# Recurrent Neural Network (RNN)
+
+Implemented RNN from scratch in Python
 
 # Knowledge Distillation
 
