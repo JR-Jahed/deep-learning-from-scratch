@@ -67,12 +67,15 @@ MatrixXd randomUniformMatrix(int rows, int cols, double min, double max) {
 
 // activation function (ReLU)
 MatrixXd relu(const MatrixXd& z) {
-    return z.unaryExpr([](double val) {
-            return max(0.0, val);
-        }
-    );
+    return z.unaryExpr([](double val) { return std::max(0.0, val); });
 }
 
+
+class Layer {
+public:
+    virtual std::vector<std::vector<double>> forward(const std::vector<std::vector<double>>& input) = 0;
+    virtual std::vector<std::vector<double>> backward(const std::vector<std::vector<double>>& grad_output, double learning_rate) = 0;
+};
 
 class Embedding {
 public:
@@ -118,8 +121,6 @@ public:
 
         int batch_size = grad.size();
         int sequence_length = grad[0].rows();
-
-        cout << batch_size << "   " << sequence_length << "\n";
 
         learning_rate *= batch_size;
 
@@ -234,10 +235,10 @@ public:
             // If we return full sequences, output is the entire h_seq.
             // Otherwise, output only the last hidden state as a 1 x hidden_size matrix.
             if (return_sequences) {
-                output[i] = h_seq;
+                output[i] = h_seq;  // shape: (batch_size, sequence_length, hidden_size)
             }
             else {
-                output[i] = h_seq.row(sequence_length - 1);
+                output[i] = h_seq.row(sequence_length - 1);  // shape: (batch_size, hidden_size)
             }
         }
         return output;
@@ -378,6 +379,83 @@ private:
     }
 };
 
+
+class Linear {
+public:
+    int hidden_size;
+    string activation;
+    MatrixXd W, b;
+    MatrixXd input;
+    MatrixXd output;
+
+    Linear(int input_size, int hidden_size, string activation) : hidden_size(hidden_size), activation(activation) {
+        double limit = sqrt(6.0 / (input_size + hidden_size));
+
+        W = randomUniformMatrix(hidden_size, input_size, -limit, limit);
+        b = MatrixXd::Zero(hidden_size, 1);
+    }
+
+    MatrixXd forward(const vector<MatrixXd>& x) {
+        // x shape: (batch_size, input_size)
+
+        // Convert vector<MatrixXd> of shape (batch_size, input_size) to MatrixXd of shape (batch_size, input_size)
+        MatrixXd mat_x(x.size(), x[0].cols());
+
+        for(int i = 0; i < x.size(); i++) {
+            mat_x.row(i) = x[i];
+        }
+
+        this->input = mat_x;  // Store input for later use
+
+        // W shape:     (hidden_size, input_size)
+        // x.T shape:   (input_size, batch_size)
+        MatrixXd z = W * mat_x.transpose() + b.replicate(1, mat_x.rows());  // z shape: (hidden_size, batch_size)
+
+        this->output = activation_function(z);
+
+        return this->output.transpose();  // Output shape: (batch_size, hidden_size)
+    }
+
+    MatrixXd backward(const MatrixXd& grad, double learning_rate) {
+        // grad shape: (batch_size, hidden_size)
+
+        int batch_size = grad.rows();
+        learning_rate *= batch_size;
+
+        // Reshape grad for matrix multiplication
+        MatrixXd dz = grad.transpose().array() * activation_derivative(output).array();  // Shape: (hidden_size, batch_size)
+        MatrixXd dW = dz * input;  // Shape: (hidden_size, input_size)
+        dW /= batch_size;  // Averaging over batch
+
+        // cout << "dz\n" << dz << "\n\n";
+        // exit(0);
+        MatrixXd db = dz.rowwise().sum();  // Shape: (hidden_size, 1)
+        db /= batch_size;  // Averaging over batch
+
+        // Update parameters
+        W -= learning_rate * dW;
+        b -= learning_rate * db;
+
+        // Compute gradient for the previous layer
+        return (W.transpose() * dz).transpose();  // Shape: (batch_size, input_size)
+    }
+
+private:
+    MatrixXd activation_function(const MatrixXd& z) {
+        // Softmax activation
+        MatrixXd exp_z = (z.array().rowwise() - z.colwise().maxCoeff().array()).exp();
+        exp_z.array().rowwise() /= exp_z.colwise().sum().array();
+        return exp_z;
+    }
+
+    MatrixXd activation_derivative(const MatrixXd& a) {
+        // Softmax derivative (element-wise)
+        // For simplicity, we assume that `a` is the output from softmax activation
+        return a.array() * (1 - a.array());
+    }
+};
+
+
 int main() {
 
     int vocab_size = 10;
@@ -407,24 +485,37 @@ int main() {
     SimpleRNN rnn1 = SimpleRNN(embedding_dim, hidden_size, true);
     SimpleRNN rnn2 = SimpleRNN(hidden_size, hidden_size, false);
 
+    int linear_size = 5;
+    auto linear = Linear(hidden_size, linear_size, "softmax");
+
     auto output_embed = embedding.forward(data);
     auto output_rnn1 = rnn1.forward(output_embed);
     auto output_rnn2 = rnn2.forward(output_rnn1);
 
-    cout << "--------------------------------\noutput_rnn2\n\n";
+    cout << "-------------------------------\noutput_rnn2\n\n";
+
     for(auto& mat: output_rnn2) {
         cout << mat << "\n\n";
     }
 
-    MatrixXd grad(num_sequences, hidden_size);
+    auto output_linear = linear.forward(output_rnn2);
+
+    cout << "--------------------------------\noutput_linear\n\n";
+    cout << output_linear << "\n\n";
+
+    MatrixXd grad(num_sequences, linear_size);
 
     for(int j = 0; j < num_sequences; j++) {
-        for(int k = 0; k < hidden_size; k++) {
+        for(int k = 0; k < linear_size; k++) {
             grad(j, k) = uniform_real_distribution(0.0, 1.0)(rng);
         }
     }
 
-    auto grad_rnn2 = rnn2.backward(grad, .01);
+    auto grad_linear = linear.backward(grad, .01);
+    cout << "-----------------------------------\ngrad_linear\n";
+    cout << grad_linear << "\n\n";
+
+    auto grad_rnn2 = rnn2.backward(grad_linear, .01);
 
     cout << "--------------------------------\ngrad_rnn2\n";
     for(auto& mat: grad_rnn2) {
@@ -437,4 +528,6 @@ int main() {
     for(auto& mat: grad_rnn1) {
         cout << mat << "\n\n";
     }
+
+    embedding.backward(grad_rnn1, .01);
 }
