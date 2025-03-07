@@ -69,6 +69,80 @@ class Embedding:
             self.embeddings[token] -= learning_rate * np.sum(grad[mask], axis=0)
 
 
+class SimpleRNN:
+    def __init__(self, input_size, hidden_size, return_sequences=True):
+        self.hidden_size = hidden_size
+        self.return_sequences = return_sequences
+        self.input_size = input_size
+
+        limit = np.sqrt(6 / (input_size + hidden_size))
+        self.W_xh = np.random.uniform(-limit, limit, (hidden_size, input_size))
+        self.W_hh = orthogonal_init(hidden_size)
+        self.b_h = np.zeros((hidden_size, 1))
+
+    def forward(self, x):
+        """
+        x shape: (batch_size, seq_length, input_size)
+        """
+        batch_size, seq_length, _ = x.shape
+        h = np.zeros((batch_size, self.hidden_size, 1))
+        self.inputs = x
+        self.h_states = []
+
+        for t in range(seq_length):
+            x_t = x[:, t, :].reshape(batch_size, self.input_size, 1)  # Shape: (batch_size, input_size, 1)
+            h = np.tanh(np.dot(self.W_xh, x_t).squeeze(2) + np.dot(self.W_hh, h).squeeze(2) + self.b_h)
+            h = np.expand_dims(h.T, -1)  # Shape: (batch_size, hidden_size, 1)
+            self.h_states.append(h)
+
+        self.h_states = np.array(self.h_states)  # Shape: (seq_length, batch_size, hidden_size, 1)
+        self.h_states = np.swapaxes(self.h_states, 0, 1)  # Shape: (batch_size, seq_length, hidden_size, 1)
+
+        return self.h_states.squeeze(3) if self.return_sequences else self.h_states[:, -1, :, 0]
+
+    def backward(self, dL_dh_last, learning_rate):
+        """
+        dL_dh_last shape: (batch_size, seq_length, hidden_size) if return_sequences else (batch_size, hidden_size)
+        """
+        batch_size, seq_length, _ = self.inputs.shape
+        learning_rate *= batch_size
+        dW_xh = np.zeros_like(self.W_xh)
+        dW_hh = np.zeros_like(self.W_hh)
+        db = np.zeros_like(self.b_h)
+
+        dL_dx = np.zeros_like(self.inputs)
+        dL_dh_next = np.zeros((batch_size, self.hidden_size))  # Gradient of next time step
+
+        if self.return_sequences:
+            for t in reversed(range(seq_length)):
+                dL_dh_t = dL_dh_last[:, t, :] + dL_dh_next  # Shape: (batch_size, hidden_size)
+                dtanh = (1 - self.h_states[:, t, :, 0] ** 2) * dL_dh_t  # Shape: (batch_size, hidden_size)
+
+                dW_xh += np.dot(dtanh.T, self.inputs[:, t, :])
+                dW_hh += np.dot(dtanh.T, self.h_states[:, t - 1, :, 0] if t > 0 else np.zeros_like(self.h_states[:, t, :, 0]))
+                db += np.sum(dtanh, axis=0, keepdims=True).T
+
+                dL_dx[:, t, :] = np.dot(dtanh, self.W_xh)  # Shape: (batch_size, input_size)
+                dL_dh_next = np.dot(dtanh, self.W_hh)  # Shape: (batch_size, hidden_size)
+        else:
+            dL_dh_t = dL_dh_last  # Shape: (batch_size, hidden_size)
+            for t in reversed(range(seq_length)):
+                dtanh = (1 - self.h_states[:, t, :, 0] ** 2) * dL_dh_t  # Shape: (batch_size, hidden_size)
+
+                dW_xh += np.dot(dtanh.T, self.inputs[:, t, :])
+                dW_hh += np.dot(dtanh.T, self.h_states[:, t - 1, :, 0] if t > 0 else np.zeros_like(self.h_states[:, t, :, 0]))
+                db += np.sum(dtanh, axis=0, keepdims=True).T
+
+                dL_dx[:, t, :] = np.dot(dtanh, self.W_xh)  # Shape: (batch_size, input_size)
+                dL_dh_t = np.dot(dtanh, self.W_hh)  # Shape: (batch_size, hidden_size)
+
+        self.W_xh -= learning_rate * dW_xh / batch_size
+        self.W_hh -= learning_rate * dW_hh / batch_size
+        self.b_h -= learning_rate * db / batch_size
+
+        return dL_dx
+
+
 class Dense:
     def __init__(self, input_size, hidden_size, activation=None):
         self.hidden_size = hidden_size
@@ -115,80 +189,6 @@ class Dense:
         if self.activation == 'softmax':
             return a * (1 - a)
         return np.ones_like(a)
-
-
-class SimpleRNN:
-    def __init__(self, input_size, hidden_size, return_sequences=True):
-        self.hidden_size = hidden_size
-        self.return_sequences = return_sequences
-        self.input_size = input_size
-
-        limit = np.sqrt(6 / (input_size + hidden_size))
-        self.W_xh = np.random.uniform(-limit, limit, (hidden_size, input_size))
-        self.W_hh = orthogonal_init(hidden_size)
-        self.b_h = np.zeros((hidden_size, 1))
-
-    def forward(self, x):
-        """
-        x shape: (batch_size, seq_length, input_size)
-        """
-        batch_size, seq_length, _ = x.shape
-        h = np.zeros((batch_size, self.hidden_size, 1))
-        self.inputs = x
-        self.h_states = []
-
-        for t in range(seq_length):
-            x_t = x[:, t, :].reshape(batch_size, self.input_size, 1)  # Shape: (batch_size, input_size, 1)
-            h = np.tanh(np.dot(self.W_xh, x_t).squeeze(2) + np.dot(self.W_hh, h).squeeze(2) + self.b_h)
-            h = np.expand_dims(h.T, -1)  # Shape: (batch_size, hidden_size, 1)
-            self.h_states.append(h)
-
-        self.h_states = np.array(self.h_states)  # Shape: (seq_length, batch_size, hidden_size, 1)
-        self.h_states = np.swapaxes(self.h_states, 0, 1)  # Shape: (batch_size, seq_length, hidden_size, 1)
-
-        return self.h_states.squeeze(3) if self.return_sequences else self.h_states[:, -1, :, 0]
-
-    def backward(self, dL_dh_last, learning_rate):
-        """
-        dL_dh_last shape: (batch_size, seq_length, hidden_size) if return_sequences else (batch_size, hidden_size)
-        """
-        batch_size, seq_length, _ = self.inputs.shape
-        learning_rate *= batch_size
-        dW_xh = np.zeros_like(self.W_xh)
-        dW_hh = np.zeros_like(self.W_hh)
-        db = np.zeros_like(self.b_h)
-
-        dL_dx = np.zeros_like(self.inputs)
-        dL_dh_next = np.zeros((batch_size, self.hidden_size))
-
-        if self.return_sequences:
-            for t in reversed(range(seq_length)):
-                dL_dh_t = dL_dh_last[:, t, :] + dL_dh_next  # Shape: (batch_size, hidden_size)
-                dtanh = (1 - self.h_states[:, t, :, 0] ** 2) * dL_dh_t  # Shape: (batch_size, hidden_size)
-
-                dW_xh += np.dot(dtanh.T, self.inputs[:, t, :])
-                dW_hh += np.dot(dtanh.T, self.h_states[:, t - 1, :, 0] if t > 0 else np.zeros_like(self.h_states[:, t, :, 0]))
-                db += np.sum(dtanh, axis=0, keepdims=True).T
-
-                dL_dx[:, t, :] = np.dot(dtanh, self.W_xh)  # Shape: (batch_size, input_size)
-                dL_dh_next = np.dot(dtanh, self.W_hh)  # Shape: (batch_size, hidden_size)
-        else:
-            dL_dh_t = dL_dh_last  # Shape: (batch_size, hidden_size)
-            for t in reversed(range(seq_length)):
-                dtanh = (1 - self.h_states[:, t, :, 0] ** 2) * dL_dh_t  # Shape: (batch_size, hidden_size)
-
-                dW_xh += np.dot(dtanh.T, self.inputs[:, t, :])
-                dW_hh += np.dot(dtanh.T, self.h_states[:, t - 1, :, 0] if t > 0 else np.zeros_like(self.h_states[:, t, :, 0]))
-                db += np.sum(dtanh, axis=0, keepdims=True).T
-
-                dL_dx[:, t, :] = np.dot(dtanh, self.W_xh)  # Shape: (batch_size, input_size)
-                dL_dh_t = np.dot(dtanh, self.W_hh)  # Shape: (batch_size, hidden_size)
-
-        self.W_xh -= learning_rate * dW_xh / batch_size
-        self.W_hh -= learning_rate * dW_hh / batch_size
-        self.b_h -= learning_rate * db / batch_size
-
-        return dL_dx
 
 
 class Sequential:
