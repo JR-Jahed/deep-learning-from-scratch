@@ -4,6 +4,7 @@ using namespace std;
 using namespace chrono;
 using namespace Eigen;
 
+
 mt19937 rng(steady_clock::now().time_since_epoch().count());
 normal_distribution normal_dist(0.0, .01);
 
@@ -67,17 +68,24 @@ MatrixXd randomUniformMatrix(int rows, int cols, double min, double max) {
 
 // activation function (ReLU)
 MatrixXd relu(const MatrixXd& z) {
-    return z.unaryExpr([](double val) { return std::max(0.0, val); });
+    return z.unaryExpr([](double val) { return max(0.0, val); });
 }
+
+using MatrixVariant = variant<MatrixXd, MatrixXi>;
+
+struct Tensor {
+    vector<MatrixVariant> data;
+};
 
 
 class Layer {
 public:
-    virtual std::vector<std::vector<double>> forward(const std::vector<std::vector<double>>& input) = 0;
-    virtual std::vector<std::vector<double>> backward(const std::vector<std::vector<double>>& grad_output, double learning_rate) = 0;
+    virtual Tensor forward(const Tensor& input) = 0;
+    virtual Tensor backward(const Tensor& grad, double learning_rate) = 0;
+    virtual ~Layer() {}
 };
 
-class Embedding {
+class Embedding: public Layer {
 public:
     int vocab_size;
     int embedding_dim;
@@ -95,68 +103,98 @@ public:
         }
     }
 
-    vector<MatrixXd> forward(const MatrixXi& x) {
-        this->input = x;
-        int batch_size = x.rows();
-        int sequence_length = x.cols();
+    Tensor forward(const Tensor& x) override {
 
-        vector output(batch_size, MatrixXd(sequence_length, embedding_dim));
+        Tensor output;
 
-        for(int i = 0; i < batch_size; i++) {
-            for(int j = 0; j < sequence_length; j++) {
-                int token = x(i, j);  // Get the index for the word in the vocabulary
+        if(const MatrixXi* pIndices = get_if<MatrixXi>(&x.data[0])) {
+            const MatrixXi& indices = *pIndices;
 
-                //  Get the corresponding embedding
-                output[i].row(j) = embeddings.row(token);
+            this->input = indices;
+            int batch_size = indices.rows();
+            int sequence_length = indices.cols();
+
+            vector<MatrixXd> embedded(batch_size);
+
+            for(int i = 0; i < batch_size; i++) {
+                MatrixXd emb_i(sequence_length, embedding_dim);
+                for(int j = 0; j < sequence_length; j++) {
+                    int token = indices(i, j);  // Get the index for the word in the vocabulary
+
+                    //  Get the corresponding embedding
+                    emb_i.row(j) = embeddings.row(token);
+                }
+                embedded[i] = emb_i;
             }
+
+            for(const auto& m: embedded) {
+                output.data.emplace_back(m);
+            }
+            // cout << "output size = " << output.data.size() << "\n\n";
+        }
+        else {
+            throw runtime_error("Tensor does not contain MatrixXi as expected.");
         }
 
         return output;  // shape: (batch_size, sequence_length, embedding_dim)
     }
 
-    void backward(const vector<MatrixXd>& grad, double learning_rate) {
+    Tensor backward(const Tensor& grad, double learning_rate) {
 
         // Update embedding vectors using gradient.
         // grad has shape (batch_size, sequence_length, embedding_dim).
 
-        int batch_size = grad.size();
-        int sequence_length = grad[0].rows();
+        // Convert grad Tensor to a vector of MatrixXd
+        vector<MatrixXd> grad_mats;
+
+        for(const auto& var: grad.data) {
+            // Use get to extract the MatrixXd
+            try {
+                const MatrixXd& mat = get<MatrixXd>(var);
+                grad_mats.emplace_back(mat);
+            }
+            catch(const bad_variant_access&) {
+                throw runtime_error("Expected MatrixXd in grad Tensor in Embedding layer backward.");
+            }
+        }
+        int batch_size = grad_mats.size();
+        // Each matrix in grad_mats has shape: (sequence_length, embedding_dim)
+        int sequence_length = grad_mats[0].rows();
 
         learning_rate *= batch_size;
 
+        // Collect unique tokens from the saved input indices
         set<int> unique_tokens;
-
-        // Collect unique tokens from input sequences
-        for(int i = 0; i < batch_size; i++) {
-            for(int j = 0; j < sequence_length; j++) {
+        for (int i = 0; i < batch_size; i++) {
+            for (int j = 0; j < sequence_length; j++) {
                 unique_tokens.insert(input(i, j));
             }
         }
 
-        // Iterate over each unique token
-        for(int token: unique_tokens) {
-            VectorXd sum_grad = VectorXd::Zero(embedding_dim);  // Initialise gradient vector for the token
-
-            // Accumulate gradients for this token
-            for(int i = 0; i < batch_size; i++) {
-                for(int j = 0; j < sequence_length; j++) {
-                    if(input(i, j) == token) {
-                        // Accumulate gradients for the corresponding token's embedding
-                        sum_grad += grad[i].row(j).transpose();
+        // Iterate over each unique token to accumulate gradients and update embeddings
+        for (int token : unique_tokens) {
+            VectorXd sum_grad = VectorXd::Zero(embedding_dim);
+            for (int i = 0; i < batch_size; i++) {
+                for (int j = 0; j < sequence_length; j++) {
+                    if (input(i, j) == token) {
+                        // grad_mats[i].row(j) is a row vector; transpose it to add as a column vector.
+                        sum_grad += grad_mats[i].row(j).transpose();
                     }
                 }
             }
-
             // Update the embedding for the current token
-            for(int i = 0; i < embedding_dim; i++) {
+            // (Assuming embeddings rows correspond to tokens.)
+            for (int i = 0; i < embedding_dim; i++) {
                 embeddings(token, i) -= learning_rate * sum_grad(i);
             }
         }
+        Tensor tensor;
+        return tensor;
     }
 };
 
 
-class SimpleRNN {
+class SimpleRNN : public Layer {
 public:
     int hidden_size;
     int input_size;
@@ -191,11 +229,23 @@ public:
     // Returns a vector of matrices where each matrix is either:
     // - (sequence_length, hidden_size) if return_sequences==true, or
     // - (1, hidden_size) if false (only last hidden state).
-    vector<MatrixXd> forward(const vector<MatrixXd>& x) {
+    Tensor forward(const Tensor& input) override {
 
         /*
         x shape: (batch_size, sequence_length, input_size)
         */
+
+        vector<MatrixXd> x;
+        x.reserve(input.data.size());
+        for (const auto &var : input.data) {
+            try {
+                const MatrixXd &mat = get<MatrixXd>(var);
+                x.push_back(mat);
+            }
+            catch (const bad_variant_access&) {
+                throw runtime_error("SimpleRNN expects input Tensor to contain MatrixXd.");
+            }
+        }
 
         int batch_size = x.size();
         int sequence_length = x[0].rows();
@@ -206,6 +256,7 @@ public:
         // Prepare the output container.
         vector<MatrixXd> output(batch_size);
 
+        // Iterate over each sequence (batch element).
         for(int i = 0; i < batch_size; i++) {
             // Create a matrix to store hidden states for this sequence.
             // Each row will correspond to the hidden state at one timestep.
@@ -214,14 +265,13 @@ public:
             // Initialize the hidden state h as a zero vector (shape: hidden_size)
             VectorXd h = VectorXd::Zero(hidden_size);
 
-            // Iterate over time steps
+            // Process the sequence time step by time step.
             for(int t = 0; t < sequence_length; t++) {
                 // Ge the t-th input token as a row vector (shape: 1 x input_size)
                 // We then transpose it to have a column vector (input_size x 1)
                 VectorXd x_t = x[i].row(t);
 
-                // Compute the new hidden state:
-                // h_new = tanh(W_xh * x_t + W_hh * h + b_h)
+                // Compute the new hidden state: h_new = tanh(W_xh * x_t + W_hh * h + b_h)
                 VectorXd h_new = (W_xh * x_t + W_hh * h + b_h).array().tanh();
                 h = h_new;
 
@@ -229,148 +279,134 @@ public:
                 h_seq.row(t) = h.transpose();
             }
 
-            // Save the full hidden state sequence for this instance
+            // Save the full hidden state sequence for backward pass
             h_states.emplace_back(h_seq);
 
             // If we return full sequences, output is the entire h_seq.
             // Otherwise, output only the last hidden state as a 1 x hidden_size matrix.
             if (return_sequences) {
-                output[i] = h_seq;  // shape: (batch_size, sequence_length, hidden_size)
+                output[i] = h_seq;  // shape: (sequence_length, hidden_size)
             }
             else {
-                output[i] = h_seq.row(sequence_length - 1);  // shape: (batch_size, hidden_size)
+                output[i] = h_seq.row(sequence_length - 1);  // shape: (1, hidden_size)
             }
         }
-        return output;
+
+        // Pack the output vector into a Tensor.
+        Tensor out;
+        for (const auto &mat : output) {
+            out.data.emplace_back(mat);
+        }
+        return out;
     }
 
-    vector<MatrixXd> backward(const vector<MatrixXd>& dL_dh_last, double learning_rate) {
-        // dL_dh_last shape: (batch_size, sequence_length, hidden_size)
+    Tensor backward(const Tensor& grad, double learning_rate) override {
+        // grad shape: (batch_size, sequence_length, hidden_size)
 
+        // Extract gradient matrices from the input Tensor.
+        vector<MatrixXd> gradVec;
+        gradVec.reserve(grad.data.size());
+        for (const auto &var : grad.data) {
+            try {
+                gradVec.emplace_back(get<MatrixXd>(var));
+            }
+            catch (const bad_variant_access&) {
+                throw runtime_error("SimpleRNN backward expects Tensor to contain MatrixXd.");
+            }
+        }
+
+        // Number of samples in the batch and sequence length from stored inputs.
         int batch_size = inputs.size();
         int sequence_length = inputs[0].rows();
+
         learning_rate *= batch_size;
 
+        // Initialize gradient accumulators for weights and bias.
         MatrixXd dW_xh = MatrixXd::Zero(hidden_size, input_size);
         MatrixXd dW_hh = MatrixXd::Zero(hidden_size, hidden_size);
         MatrixXd db = MatrixXd::Zero(hidden_size, 1);
 
-        vector dL_dx = vector<MatrixXd>(batch_size, MatrixXd::Zero(sequence_length, input_size));
+        // dL_dx will hold gradients with respect to the RNN inputs.
+        vector<MatrixXd> dL_dx(batch_size, MatrixXd::Zero(sequence_length, input_size));
 
+        // dL_dh_next will hold the gradient propagated from future time steps.
         MatrixXd dL_dh_next = MatrixXd::Zero(batch_size, hidden_size);
+        MatrixXd dL_dh_t;  // Gradient at current time step
 
-        MatrixXd dL_dh_t;
-
-        for(int t = sequence_length - 1; t >= 0; t--) {
-            MatrixXd dL_dh_last_at_t(batch_size, hidden_size);
-            MatrixXd h_states_at_t(batch_size, hidden_size);
-            MatrixXd h_states_at_t_minus_1(batch_size, hidden_size);
-            MatrixXd inputs_at_t(batch_size, input_size);
-
-            for(int i = 0; i < batch_size; i++) {
-                dL_dh_last_at_t.row(i) = dL_dh_last[i].row(t);
-                h_states_at_t.row(i) = h_states[i].row(t);
-                inputs_at_t.row(i) = inputs[i].row(t);
-
-                if(t > 0) {
-                    h_states_at_t_minus_1.row(i) = h_states[i].row(t - 1);
-                }
-            }
-            dL_dh_t = dL_dh_last_at_t + dL_dh_next;
-
-            // cout << "dl_dh_t\n" << dL_dh_t << "\n\n";
-            // cout << "h_states_at_t\n" << h_states_at_t << "\n\n";
-
-            MatrixXd dtanh = (1 - h_states_at_t.array().square()) * dL_dh_t.array();
-            // cout << "dtanh\n" << dtanh << "\n\n";
-
-            dW_xh += dtanh.transpose() * inputs_at_t;
-            // cout << "dw_xh\n" << dW_xh << "\n\n";
-            dW_hh += dtanh.transpose() * (t > 0 ? h_states_at_t_minus_1 : MatrixXd::Zero(batch_size, hidden_size));
-            // cout << "dw_hh\n" << dW_hh << "\n\n";
-            db += dtanh.colwise().sum().transpose();
-            // cout << "db\n" << db << "\n\n";
-
-            // dtanh shape:   (batch_size, hidden_size)
-            // W_xh shape:    (hidden_size, input_size)
-            // dL_dx_t shape: (batch_size, input_size)
-
-            MatrixXd dL_dx_t = dtanh * W_xh;
-
-            for(int i = 0; i < batch_size; i++) {
-                dL_dx[i].row(t) = dL_dx_t.row(i);
-            }
-            // cout << "dl_dx\n";
-            // for(auto& mat: dL_dx) {
-            //     cout << mat << "\n\n";
+        // If not full sequence, then each gradVec[i] is shape (1, hidden_size).
+        // Initialize dL_dh_t (for each sample) accordingly.
+        if (!return_sequences) {
+            // dL_dh_t = MatrixXd(batch_size, hidden_size);
+            // for (int i = 0; i < batch_size; i++) {
+            //     dL_dh_t.row(i) = gradVec[i].row(0); // grad from last timestep only
             // }
-
-            dL_dh_next = dtanh * W_hh;
-            // cout << "dl_dh_next\n" << dL_dh_next << "\n\n";
+            dL_dh_t = gradVec[0];
         }
 
-        W_xh -= learning_rate * dW_xh;
-        W_hh -= learning_rate * dW_hh;
-        b_h -= learning_rate * db;
-
-        return dL_dx;
-    }
-
-
-    // This function will be called if the next layer is a Dense layer. In that case, during forward pass
-    // the output for only the last time step was passed to the Dense layer. Therefore, during backpropagation
-    // dL_dh_last is a 2D matrix, since there is no time step
-
-    vector<MatrixXd> backward(const MatrixXd& dL_dh_last, double learning_rate) {
-        // dL_dh_last shape: (batch_size, hidden_size)
-
-        int batch_size = inputs.size();
-        int sequence_length = inputs[0].rows();
-        learning_rate *= batch_size;
-
-        MatrixXd dW_xh = MatrixXd::Zero(hidden_size, input_size);
-        MatrixXd dW_hh = MatrixXd::Zero(hidden_size, hidden_size);
-        MatrixXd db = MatrixXd::Zero(hidden_size, 1);
-
-        vector dL_dx = vector<MatrixXd>(batch_size, MatrixXd::Zero(sequence_length, input_size));
-
-        MatrixXd dL_dh_next = MatrixXd::Zero(batch_size, hidden_size);
-
-        MatrixXd dL_dh_t = dL_dh_last;
-
+        // Loop backwards through time.
         for(int t = sequence_length - 1; t >= 0; t--) {
-            MatrixXd h_states_at_t(batch_size, hidden_size);
-            MatrixXd h_states_at_t_minus_1(batch_size, hidden_size);
-            MatrixXd inputs_at_t(batch_size, input_size);
+            MatrixXd dL_dh_at_t = MatrixXd::Zero(batch_size, hidden_size);
+            MatrixXd h_states_at_t = MatrixXd::Zero(batch_size, hidden_size);
+            MatrixXd h_states_at_t_minus_1 = MatrixXd::Zero(batch_size, hidden_size);
+            MatrixXd inputs_at_t = MatrixXd::Zero(batch_size, input_size);
 
+            // Gather the necessary slices for each sample.
             for(int i = 0; i < batch_size; i++) {
+                // h_states[i] is stored during forward pass.
                 h_states_at_t.row(i) = h_states[i].row(t);
                 inputs_at_t.row(i) = inputs[i].row(t);
-
+                if(return_sequences) {
+                    // For full sequence, the gradient for time t is provided.
+                    dL_dh_at_t.row(i) = gradVec[i].row(t);
+                }
                 if(t > 0) {
                     h_states_at_t_minus_1.row(i) = h_states[i].row(t - 1);
                 }
             }
 
-            MatrixXd dtanh = (1 - h_states_at_t.array().square()) * dL_dh_t.array();
+            // If full sequence, combine the gradient from the output and the backpropagated gradient.
+            if(return_sequences) {
+                dL_dh_t = dL_dh_at_t + dL_dh_next;
+            }
+            else {
+                // For the non-full sequence case, only the last time step has an external gradient.
+                // For earlier time steps, dL_dh_t comes solely from backpropagation.
+                if (t < sequence_length - 1) {
+                    dL_dh_t = dL_dh_t + dL_dh_next;
+                }
+            }
 
+            // Compute dtanh = (1 - h_t^2) ∘ dL_dh_t elementwise.
+            MatrixXd dtanh = (1 - h_states_at_t.array().square()).matrix().cwiseProduct(dL_dh_t);
+
+            // Accumulate gradients.
             dW_xh += dtanh.transpose() * inputs_at_t;
             dW_hh += dtanh.transpose() * (t > 0 ? h_states_at_t_minus_1 : MatrixXd::Zero(batch_size, hidden_size));
             db += dtanh.colwise().sum().transpose();
 
+            // Compute gradient with respect to input at time t.
             MatrixXd dL_dx_t = dtanh * W_xh;
             for(int i = 0; i < batch_size; i++) {
                 dL_dx[i].row(t) = dL_dx_t.row(i);
             }
-            dL_dh_t = dtanh * W_hh;
-        }
+            // Propagate gradient to previous hidden state.
+            dL_dh_next = dtanh * W_hh;
 
+            // In the non-full sequence case, for t == sequence_length - 1 the initial
+            // dL_dh_t was already set from the external gradient.
+        }
         W_xh -= learning_rate * dW_xh;
         W_hh -= learning_rate * dW_hh;
         b_h -= learning_rate * db;
 
-        return dL_dx;
+        // Package the gradient with respect to input into a Tensor.
+        Tensor ret;
+        for (const auto &mat : dL_dx) {
+            ret.data.push_back(mat);
+        }
+        return ret;
     }
+
 private:
     MatrixXd orthogonalInit(int size) {
         MatrixXd A = randomUniformMatrix(size, size, -1.0, 1.0);
@@ -380,13 +416,13 @@ private:
 };
 
 
-class Linear {
+class Linear : public Layer {
 public:
-    int hidden_size;
-    string activation;
-    MatrixXd W, b;
-    MatrixXd input;
-    MatrixXd output;
+    int hidden_size;        // number of output units
+    string activation;      // e.g., "relu", "sigmoid", etc.
+    MatrixXd W, b;          // W: (hidden_size x input_size), b: (hidden_size x 1)
+    MatrixXd inputs;         // Stored inputs from forward pass (shape: (batch_size, input_size))
+    MatrixXd output;        // Stored pre-activation output (shape: (hidden_size, batch_size))
 
     Linear(int input_size, int hidden_size, string activation) : hidden_size(hidden_size), activation(activation) {
         double limit = sqrt(6.0 / (input_size + hidden_size));
@@ -395,49 +431,92 @@ public:
         b = MatrixXd::Zero(hidden_size, 1);
     }
 
-    MatrixXd forward(const vector<MatrixXd>& x) {
-        // x shape: (batch_size, input_size)
+    // Forward pass: accepts a Tensor containing a vector of MatrixVariant holding MatrixXd.
+    // We assume that each element in the Tensor represents one sample (row vector) with shape (1 x input_size).
+    // We combine them into a single MatrixXd of shape (batch_size, input_size).
+    Tensor forward(const Tensor& input) override {
 
-        // Convert vector<MatrixXd> of shape (batch_size, input_size) to MatrixXd of shape (batch_size, input_size)
-        MatrixXd mat_x(x.size(), x[0].cols());
-
-        for(int i = 0; i < x.size(); i++) {
+        // Extract MatrixXd from Tensor.
+        vector<MatrixXd> x;
+        x.reserve(input.data.size());
+        for (const auto &var : input.data) {
+            try {
+                x.emplace_back(get<MatrixXd>(var));
+            }
+            catch (const bad_variant_access&) {
+                throw runtime_error("Linear layer expects input Tensor to contain MatrixXd.");
+            }
+        }
+        int batch_size = x.size();
+        int input_cols = x[0].cols(); // assuming each sample is a row vector
+        MatrixXd mat_x(batch_size, input_cols);
+        for (int i = 0; i < batch_size; i++) {
             mat_x.row(i) = x[i];
         }
 
-        this->input = mat_x;  // Store input for later use
+        // Save input for backward pass.
+        this->inputs = mat_x;
 
-        // W shape:     (hidden_size, input_size)
-        // x.T shape:   (input_size, batch_size)
-        MatrixXd z = W * mat_x.transpose() + b.replicate(1, mat_x.rows());  // z shape: (hidden_size, batch_size)
+        // Compute z = W * x^T + b, where:
+        //   - W has shape (hidden_size, input_size)
+        //   - x^T has shape (input_size, batch_size)
+        //   - b is (hidden_size, 1) and is replicated to (hidden_size, batch_size)
+        MatrixXd z = W * mat_x.transpose() + b.replicate(1, batch_size);
 
+        // Apply activation function.
+        // Here, activation_function(z) returns a matrix with the same shape as z (i.e. (hidden_size, batch_size)).
         this->output = activation_function(z);
 
-        return this->output.transpose();  // Output shape: (batch_size, hidden_size)
+        // We return the output as a Tensor, transposing z so that the output shape becomes (batch_size, hidden_size).
+        MatrixXd output_mat = this->output.transpose();
+        Tensor output;
+        output.data.emplace_back(output_mat);
+        return output;  // Output shape: (batch_size, hidden_size)
     }
 
-    MatrixXd backward(const MatrixXd& grad, double learning_rate) {
-        // grad shape: (batch_size, hidden_size)
+    // Backward pass: accepts a Tensor whose first element is a MatrixXd with shape (batch_size, hidden_size)
+    // representing the gradient from the next layer. It returns a Tensor containing the gradient with respect to
+    // the Linear layer's input.
+    Tensor backward(const Tensor& grad, double learning_rate) override {
+        // Extract the gradient matrix.
+        vector<MatrixXd> gradVec;
+        for (const auto &var : grad.data) {
+            try {
+                gradVec.emplace_back(get<MatrixXd>(var));
+            }
+            catch (const bad_variant_access&) {
+                throw runtime_error("Linear backward expects grad Tensor to contain MatrixXd.");
+            }
+        }
+        if (gradVec.empty()) {
+            throw runtime_error("Linear backward: empty grad Tensor.");
+        }
 
-        int batch_size = grad.rows();
+        // grad_mat has shape (batch_size, hidden_size)
+        MatrixXd grad_mat = gradVec[0];
+        int batch_size = grad_mat.rows();
         learning_rate *= batch_size;
 
-        // Reshape grad for matrix multiplication
-        MatrixXd dz = grad.transpose().array() * activation_derivative(output).array();  // Shape: (hidden_size, batch_size)
-        MatrixXd dW = dz * input;  // Shape: (hidden_size, input_size)
-        dW /= batch_size;  // Averaging over batch
+        // Compute derivative of the activation function.
+        // Note: this->output is the activated z of shape (hidden_size, batch_size)
+        // grad_mat.transpose() is (hidden_size, batch_size), so elementwise multiplication works.
+        MatrixXd dz = grad_mat.transpose().array() * activation_derivative(output).array();
 
-        // cout << "dz\n" << dz << "\n\n";
-        // exit(0);
-        MatrixXd db = dz.rowwise().sum();  // Shape: (hidden_size, 1)
+        // Compute gradients for weights and biases.
+        MatrixXd dW = dz * inputs; // (hidden_size, batch_size) * (batch_size, input_size) = (hidden_size, input_size)
+        dW /= batch_size;
+        MatrixXd db = dz.rowwise().sum(); // sum over batch: shape (hidden_size, 1)
         db /= batch_size;  // Averaging over batch
 
         // Update parameters
         W -= learning_rate * dW;
         b -= learning_rate * db;
 
-        // Compute gradient for the previous layer
-        return (W.transpose() * dz).transpose();  // Shape: (batch_size, input_size)
+        // Compute gradient for the previous layer: dL/dx = (W^T * dz)^T.
+        MatrixXd dL_dx = (W.transpose() * dz).transpose(); // shape: (batch_size, input_size)
+        Tensor output;
+        output.data.push_back(dL_dx);
+        return output;  // Shape: (batch_size, input_size)
     }
 
 private:
@@ -455,6 +534,20 @@ private:
     }
 };
 
+void print_tensor(Tensor tensor) {
+    vector<MatrixXd> matrices;
+
+    for(auto& var: tensor.data) {
+        matrices.emplace_back(get<MatrixXd>(var));
+    }
+
+    cout << "output size = " << matrices.size() << "\n\n";
+
+    for(auto& mat: matrices) {
+        cout << mat << "\n\n";
+    }
+}
+
 
 int main() {
 
@@ -466,17 +559,17 @@ int main() {
     int epochs = 10;
     int batch_size = 32;
 
-    MatrixXi data(num_sequences, max_sequence_length);
+    vector data(1, MatrixXi(num_sequences, max_sequence_length));
     vector<int> labels = vector<int>(num_sequences);
 
     for(int i = 0; i < num_sequences; i++) {
         labels[i] = uniform_int_distribution(0, classes - 1)(rng);
         for(int j = 0; j < max_sequence_length; j++) {
-            data(i, j) = uniform_int_distribution(0, vocab_size - 1)(rng);
+            data[0](i, j) = uniform_int_distribution(0, vocab_size - 1)(rng);
         }
     }
 
-    cout << data << "\n\n";
+    cout << data[0] << "\n\n";
 
     Embedding embedding = Embedding(vocab_size, embedding_dim);
 
@@ -488,46 +581,50 @@ int main() {
     int linear_size = 5;
     auto linear = Linear(hidden_size, linear_size, "softmax");
 
-    auto output_embed = embedding.forward(data);
+    Tensor tensor_data;
+    tensor_data.data = vector<MatrixVariant>(data.begin(), data.end());
+
+
+    auto output_embed = embedding.forward(tensor_data);
+
+    cout << "------------------------------\noutput_embed\n\n";
+    print_tensor(output_embed);
+
     auto output_rnn1 = rnn1.forward(output_embed);
     auto output_rnn2 = rnn2.forward(output_rnn1);
 
     cout << "-------------------------------\noutput_rnn2\n\n";
-
-    for(auto& mat: output_rnn2) {
-        cout << mat << "\n\n";
-    }
+    print_tensor(output_rnn2);
 
     auto output_linear = linear.forward(output_rnn2);
 
     cout << "--------------------------------\noutput_linear\n\n";
-    cout << output_linear << "\n\n";
+    print_tensor(output_linear);
 
-    MatrixXd grad(num_sequences, linear_size);
+    vector grad(1, MatrixXd(num_sequences, linear_size));
 
     for(int j = 0; j < num_sequences; j++) {
         for(int k = 0; k < linear_size; k++) {
-            grad(j, k) = uniform_real_distribution(0.0, 1.0)(rng);
+            grad[0](j, k) = uniform_real_distribution(0.0, 1.0)(rng);
         }
     }
 
-    auto grad_linear = linear.backward(grad, .01);
+    Tensor tensor_grad;
+    tensor_grad.data = vector<MatrixVariant>(grad.begin(), grad.end());
+
+    auto grad_linear = linear.backward(tensor_grad, .01);
     cout << "-----------------------------------\ngrad_linear\n";
-    cout << grad_linear << "\n\n";
+    print_tensor(grad_linear);
 
     auto grad_rnn2 = rnn2.backward(grad_linear, .01);
 
     cout << "--------------------------------\ngrad_rnn2\n";
-    for(auto& mat: grad_rnn2) {
-        cout << mat << "\n\n";
-    }
+    print_tensor(grad_rnn2);
 
     auto grad_rnn1 = rnn1.backward(grad_rnn2, .01);
 
     cout << "--------------------------------\ngrad_rnn1\n";
-    for(auto& mat: grad_rnn1) {
-        cout << mat << "\n\n";
-    }
+    print_tensor(grad_rnn1);
 
     embedding.backward(grad_rnn1, .01);
 }
