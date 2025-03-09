@@ -8,49 +8,72 @@ using namespace Eigen;
 mt19937 rng(steady_clock::now().time_since_epoch().count());
 normal_distribution normal_dist(0.0, .01);
 
-// Cross-Entropy Loss function
-double cross_entropy_loss(const vector<vector<double>>& predictions, const vector<int>& labels) {
-    const int batch_size = static_cast<int>(predictions.size());
+using MatrixVariant = variant<MatrixXd, MatrixXi>;
 
+struct Tensor {
+    vector<MatrixVariant> data;
+
+    void print() {
+        for(auto& var: data) {
+            cout << get<MatrixXd>(var) << "\n\n";
+        }
+    }
+};
+
+
+// Cross-Entropy Loss function
+double cross_entropy_loss(const Tensor& predictions, const vector<int>& labels) {
+
+    // Expect the predictions Tensor to hold a MatrixXd as its first element.
+    MatrixXd pred;
+    try {
+        pred = get<MatrixXd>(predictions.data[0]);
+    }
+    catch(const bad_variant_access&) {
+        throw runtime_error("cross_entropy_loss expects predictions to contain a MatrixXd");
+    }
+
+    const int batch_size =  pred.rows();
     double loss = 0;
-    // Calculate loss for each sample in the batch
-    for (int i = 0; i < batch_size; i++) {
-        const int label = labels[i];
-        // Extract the probability corresponding to the correct label
-        const double correct_prob = predictions[i][label];
-        loss -= log(correct_prob + 1e-15f); // Add epsilon for numerical stability
+
+    // Compute the loss for each sample.
+    for(int i = 0; i < batch_size; i++) {
+        int label = labels[i];
+        double correct_prob = pred(i, label);
+        loss -= log(correct_prob + 1e-15); // Add epsilon for numerical stability.
     }
 
     return loss / batch_size;  // Average loss
 }
 
 // Cross-Entropy Gradient function
-vector<vector<double>> cross_entropy_gradient(const vector<vector<double>>& predictions, const vector<int>& labels) {
-    const int batch_size = static_cast<int>(predictions.size());
+Tensor cross_entropy_gradient(const Tensor& predictions, const vector<int>& labels) {
+    MatrixXd pred;
+    try {
+        pred = get<MatrixXd>(predictions.data[0]);
+    }
+    catch(const bad_variant_access&) {
+        throw runtime_error("cross_entropy_gradient expects predictions to contain a MatrixXd");
+    }
 
-    const int num_classes = static_cast<int>(predictions[0].size());
+    int batch_size = pred.rows();
+    int num_classes = pred.cols();
+    MatrixXd grad = pred; // Start with a copy of the predictions.
 
-    vector gradient(batch_size, vector<double>(num_classes));
+    // For each sample, subtract 1 from the probability of the correct class.
 
-    // Calculate gradient for each sample in the batch
     for(int i = 0; i < batch_size; i++) {
-        const int label = labels[i];
-
-        // Copy the predictions and subtract 1 from the correct class
-        for(int j = 0; j < num_classes; j++) {
-            gradient[i][j] = predictions[i][j];
-        }
-        gradient[i][label] -= 1;
+        int label = labels[i];
+        grad(i, label) -= 1.0;
     }
 
-    // Normalize the gradient by batch size
-    for (int i = 0; i < batch_size; i++) {
-        for (int j = 0; j < num_classes; j++) {
-            gradient[i][j] /= batch_size;
-        }
-    }
+    // Normalize the gradient by the batch size.
+    grad /= static_cast<double>(batch_size);
 
-    return gradient;
+    // Pack the resulting gradient matrix into a Tensor.
+    Tensor grad_tensor;
+    grad_tensor.data.emplace_back(grad);
+    return grad_tensor;
 }
 
 MatrixXd randomUniformMatrix(int rows, int cols, double min, double max) {
@@ -70,12 +93,6 @@ MatrixXd randomUniformMatrix(int rows, int cols, double min, double max) {
 MatrixXd relu(const MatrixXd& z) {
     return z.unaryExpr([](double val) { return max(0.0, val); });
 }
-
-using MatrixVariant = variant<MatrixXd, MatrixXi>;
-
-struct Tensor {
-    vector<MatrixVariant> data;
-};
 
 
 class Layer {
@@ -130,7 +147,6 @@ public:
             for(const auto& m: embedded) {
                 output.data.emplace_back(m);
             }
-            // cout << "output size = " << output.data.size() << "\n\n";
         }
         else {
             throw runtime_error("Tensor does not contain MatrixXi as expected.");
@@ -162,6 +178,8 @@ public:
         int sequence_length = grad_mats[0].rows();
 
         learning_rate *= batch_size;
+
+        cout << "embedding grad\n" << grad_mats[0] << "\n\n";
 
         // Collect unique tokens from the saved input indices
         set<int> unique_tokens;
@@ -240,7 +258,7 @@ public:
         for (const auto &var : input.data) {
             try {
                 const MatrixXd &mat = get<MatrixXd>(var);
-                x.push_back(mat);
+                x.emplace_back(mat);
             }
             catch (const bad_variant_access&) {
                 throw runtime_error("SimpleRNN expects input Tensor to contain MatrixXd.");
@@ -321,6 +339,8 @@ public:
 
         learning_rate *= batch_size;
 
+        // cout << "rnn grad\n" <<
+
         // Initialize gradient accumulators for weights and bias.
         MatrixXd dW_xh = MatrixXd::Zero(hidden_size, input_size);
         MatrixXd dW_hh = MatrixXd::Zero(hidden_size, hidden_size);
@@ -333,13 +353,9 @@ public:
         MatrixXd dL_dh_next = MatrixXd::Zero(batch_size, hidden_size);
         MatrixXd dL_dh_t;  // Gradient at current time step
 
-        // If not full sequence, then each gradVec[i] is shape (1, hidden_size).
-        // Initialize dL_dh_t (for each sample) accordingly.
+        // If not full sequence, then gradVec is of shape (1, batch_size, hidden_size).
+        // Initialize dL_dh_t
         if (!return_sequences) {
-            // dL_dh_t = MatrixXd(batch_size, hidden_size);
-            // for (int i = 0; i < batch_size; i++) {
-            //     dL_dh_t.row(i) = gradVec[i].row(0); // grad from last timestep only
-            // }
             dL_dh_t = gradVec[0];
         }
 
@@ -372,7 +388,7 @@ public:
                 // For the non-full sequence case, only the last time step has an external gradient.
                 // For earlier time steps, dL_dh_t comes solely from backpropagation.
                 if (t < sequence_length - 1) {
-                    dL_dh_t = dL_dh_t + dL_dh_next;
+                    dL_dh_t = dL_dh_next;
                 }
             }
 
@@ -402,7 +418,7 @@ public:
         // Package the gradient with respect to input into a Tensor.
         Tensor ret;
         for (const auto &mat : dL_dx) {
-            ret.data.push_back(mat);
+            ret.data.emplace_back(mat);
         }
         return ret;
     }
@@ -494,6 +510,7 @@ public:
 
         // grad_mat has shape (batch_size, hidden_size)
         MatrixXd grad_mat = gradVec[0];
+
         int batch_size = grad_mat.rows();
         learning_rate *= batch_size;
 
@@ -515,7 +532,7 @@ public:
         // Compute gradient for the previous layer: dL/dx = (W^T * dz)^T.
         MatrixXd dL_dx = (W.transpose() * dz).transpose(); // shape: (batch_size, input_size)
         Tensor output;
-        output.data.push_back(dL_dx);
+        output.data.emplace_back(dL_dx);
         return output;  // Shape: (batch_size, input_size)
     }
 
@@ -534,97 +551,162 @@ private:
     }
 };
 
-void print_tensor(Tensor tensor) {
-    vector<MatrixXd> matrices;
+class Sequential_ {
+public:
+    vector<shared_ptr<Layer>> layers;
 
-    for(auto& var: tensor.data) {
-        matrices.emplace_back(get<MatrixXd>(var));
+    Sequential_() {}
+
+    void add(const shared_ptr<Layer>& layer) {
+        layers.emplace_back(layer);
     }
 
-    cout << "output size = " << matrices.size() << "\n\n";
-
-    for(auto& mat: matrices) {
-        cout << mat << "\n\n";
+    Tensor forward(Tensor x) {
+        // cout << "forward\n";
+        for(const auto& layer: layers) {
+            x = layer->forward(x);
+            // x.print();
+        }
+        return x;
     }
-}
+    double backward(Tensor X, vector<int> y_true, double learning_rate) {
+        auto y_pred = forward(X);
+        // cout << "y_pred\n";
+        // y_pred.print();
+        auto loss_grad = cross_entropy_gradient(y_pred, y_true);
+
+        for(int i = layers.size() - 1; i >= 0; i--) {
+            loss_grad = layers[i]->backward(loss_grad, learning_rate);
+        }
+
+        double loss = cross_entropy_loss(y_pred, y_true);
+        return loss;
+    }
+
+    MatrixXd fit(MatrixXi X_train, vector<int> y_train, int epochs, int batch_size, int num_classes, double learning_rate = 0.01, bool print_predictions=true) {
+
+        int num_samples = X_train.rows();
+
+        for(int epoch = 1; epoch <= epochs; epoch++) {
+
+            double totalLoss = 0;
+
+            for(int i = 0; i < num_samples; i++) {
+                const int start_index = i * batch_size;
+                const int end_index = min(start_index + batch_size, num_samples);
+
+                if(start_index >= num_samples)
+                    break;
+
+                MatrixXi mat = X_train.block(start_index, 0, end_index - start_index, X_train.cols());
+
+                Tensor tensor;
+                tensor.data = vector<MatrixVariant>(1, mat);
+                vector labels(y_train.begin() + start_index, y_train.begin() + end_index);
+
+                double loss = backward(tensor, labels, learning_rate);
+                totalLoss += loss * (end_index - start_index);
+            }
+
+            if(epoch == 1 || epoch % 10 == 0 || epoch == epochs) {
+                printf("Epoch = %02d    Loss: %.5lf\n", epoch, totalLoss / num_samples);
+            }
+        }
+        cout << "\n\n";
+
+        MatrixXd predictions(num_samples, num_classes);
+
+        for(int i = 0; i < num_samples; i++) {
+            Tensor tensor;
+            MatrixXi mat = X_train.row(i);
+            tensor.data = vector<MatrixVariant>(1, mat);
+            Tensor predictionTensor = forward(tensor);
+            const MatrixXd prediction = get<MatrixXd>(predictionTensor.data[0]);
+
+            if(print_predictions) {
+                cout << prediction << "  ------  " << prediction.maxCoeff() << "\n";
+            }
+            predictions.row(i) = prediction.row(0);
+        }
+        return predictions;
+    }
+};
 
 
 int main() {
 
-    int vocab_size = 10;
-    int embedding_dim = 4;
-    int max_sequence_length = 5;
-    int num_sequences = 3;
-    int classes = 5;
-    int epochs = 10;
+    int vocab_size = 1000;
+    int embedding_dim = 32;
+    int max_sequence_length = 10;
+    int num_sequences = 50;
+    int num_classes = 5;
+    int epochs = 20;
     int batch_size = 32;
 
-    vector data(1, MatrixXi(num_sequences, max_sequence_length));
+    MatrixXi data(num_sequences, max_sequence_length);
     vector<int> labels = vector<int>(num_sequences);
 
     for(int i = 0; i < num_sequences; i++) {
-        labels[i] = uniform_int_distribution(0, classes - 1)(rng);
+        labels[i] = uniform_int_distribution(0, num_classes - 1)(rng);
         for(int j = 0; j < max_sequence_length; j++) {
-            data[0](i, j) = uniform_int_distribution(0, vocab_size - 1)(rng);
+            data(i, j) = uniform_int_distribution(0, vocab_size - 1)(rng);
         }
     }
 
-    cout << data[0] << "\n\n";
+    cout << data << "\n\n";
 
     Embedding embedding = Embedding(vocab_size, embedding_dim);
 
-    int hidden_size = 4;
-
-    SimpleRNN rnn1 = SimpleRNN(embedding_dim, hidden_size, true);
-    SimpleRNN rnn2 = SimpleRNN(hidden_size, hidden_size, false);
+    vector hidden_size = {64, 128, 128};
 
     int linear_size = 5;
-    auto linear = Linear(hidden_size, linear_size, "softmax");
 
-    Tensor tensor_data;
-    tensor_data.data = vector<MatrixVariant>(data.begin(), data.end());
+    Sequential_ model = Sequential_();
 
+    model.add(make_shared<Embedding>(Embedding(vocab_size, embedding_dim)));
 
-    auto output_embed = embedding.forward(tensor_data);
+    for(int i = 0; i < hidden_size.size(); i++) {
+        model.add(make_shared<SimpleRNN>(SimpleRNN(i == 0 ? embedding_dim : hidden_size[i - 1], hidden_size[i], i != hidden_size.size() - 1)));
+    }
 
-    cout << "------------------------------\noutput_embed\n\n";
-    print_tensor(output_embed);
+    model.add(make_shared<Linear>(hidden_size.back(), linear_size, "softmax"));
 
-    auto output_rnn1 = rnn1.forward(output_embed);
-    auto output_rnn2 = rnn2.forward(output_rnn1);
+    auto start = high_resolution_clock::now();
 
-    cout << "-------------------------------\noutput_rnn2\n\n";
-    print_tensor(output_rnn2);
+    MatrixXd predictions = model.fit(data, labels, epochs, batch_size, num_classes);
 
-    auto output_linear = linear.forward(output_rnn2);
+    auto end = high_resolution_clock::now();
 
-    cout << "--------------------------------\noutput_linear\n\n";
-    print_tensor(output_linear);
+    auto totalTime = duration_cast<milliseconds>(end - start);
 
-    vector grad(1, MatrixXd(num_sequences, linear_size));
+    vector<int> predictedLabels(num_sequences);
 
-    for(int j = 0; j < num_sequences; j++) {
-        for(int k = 0; k < linear_size; k++) {
-            grad[0](j, k) = uniform_real_distribution(0.0, 1.0)(rng);
+    for(int i = 0; i < num_sequences; i++) {
+        predictions.row(i).maxCoeff(&predictedLabels[i]);
+    }
+
+    cout << "correct labels =       ";
+
+    for(auto& val: labels) {
+        cout << val  << " ";
+    }
+
+    cout << "\npredicted labels =     ";
+
+    for(auto& val: predictedLabels) {
+        cout << val << " ";
+    }
+    cout << "\n";
+
+    int correct_prediction = 0;
+
+    for(int i = 0; i < num_sequences; i++) {
+        if(predictedLabels[i] == labels[i]) {
+            correct_prediction += 1;
         }
     }
 
-    Tensor tensor_grad;
-    tensor_grad.data = vector<MatrixVariant>(grad.begin(), grad.end());
+    cout << "Correct prediction = " << correct_prediction << "\n";
 
-    auto grad_linear = linear.backward(tensor_grad, .01);
-    cout << "-----------------------------------\ngrad_linear\n";
-    print_tensor(grad_linear);
-
-    auto grad_rnn2 = rnn2.backward(grad_linear, .01);
-
-    cout << "--------------------------------\ngrad_rnn2\n";
-    print_tensor(grad_rnn2);
-
-    auto grad_rnn1 = rnn1.backward(grad_rnn2, .01);
-
-    cout << "--------------------------------\ngrad_rnn1\n";
-    print_tensor(grad_rnn1);
-
-    embedding.backward(grad_rnn1, .01);
+    cout << "Total time = " << static_cast<double>(totalTime.count()) / 1000 << " seconds\n";
 }

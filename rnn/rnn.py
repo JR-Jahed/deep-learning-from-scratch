@@ -105,7 +105,6 @@ class SimpleRNN:
         dL_dh_last shape: (batch_size, seq_length, hidden_size) if return_sequences else (batch_size, hidden_size)
         """
         batch_size, seq_length, _ = self.inputs.shape
-        learning_rate *= batch_size
         dW_xh = np.zeros_like(self.W_xh)
         dW_hh = np.zeros_like(self.W_hh)
         db = np.zeros_like(self.b_h)
@@ -136,9 +135,9 @@ class SimpleRNN:
                 dL_dx[:, t, :] = np.dot(dtanh, self.W_xh)  # Shape: (batch_size, input_size)
                 dL_dh_t = np.dot(dtanh, self.W_hh)  # Shape: (batch_size, hidden_size)
 
-        self.W_xh -= learning_rate * dW_xh / batch_size
-        self.W_hh -= learning_rate * dW_hh / batch_size
-        self.b_h -= learning_rate * db / batch_size
+        self.W_xh -= learning_rate * dW_xh
+        self.W_hh -= learning_rate * dW_hh
+        self.b_h -= learning_rate * db
 
         return dL_dx
 
