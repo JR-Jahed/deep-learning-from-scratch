@@ -2,6 +2,14 @@ import numpy as np
 
 np.set_printoptions(linewidth=1000)
 
+
+def softmax(x, axis=None):
+    # Subtract max for numerical stability
+    x = x - np.max(x, axis=axis, keepdims=True)
+    exp_x = np.exp(x)
+    return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
+
+
 class Embedding:
     def __init__(self, vocab_size, embedding_dim):
         self.vocab_size = vocab_size
@@ -51,9 +59,83 @@ class PositionalEmbedding:
         return x
 
 
-"""
-The shape of the input to MultiHeadAttention is (batch_size, max_sequence_length, d_model)
-"""
+class ScaledDotProductAttention:
+    def __init__(self, d_model, d):
+
+        self.d_model = d_model
+        self.d = d
+
+        self.WQ = np.random.uniform(0, 1, (d_model, d))
+        self.WK = np.random.uniform(0, 1, (d_model, d))
+        self.WV = np.random.uniform(0, 1, (d_model, d))
+
+    def forward(self, x):
+
+        """
+        @Params
+        x: (batch_size, max_sequence_length, d_model)
+
+        @Returns
+        output: (batch_size, max_sequence_length, d)
+        """
+
+        output = []  # List to store the output for each sample in the batch
+
+        for mat in x:  # 'mat' shape: (max_sequence_length, d_model)
+            # Linear projections for Q, K, V
+            Q = np.dot(mat, self.WQ)  # shape: (max_sequence_length, d)
+            K = np.dot(mat, self.WK)  # shape: (max_sequence_length, d)
+            V = np.dot(mat, self.WV)  # shape: (max_sequence_length, d)
+
+            # Compute scaled dot product
+            QK = np.dot(Q, K.T)  # shape: (max_sequence_length, max_sequence_length)
+            QK /= np.sqrt(self.d)
+
+            # Mask (optional)
+
+            # Apply softmax
+            QK = softmax(QK, axis=-1)
+
+            QKV = np.dot(QK, V)  # shape: (max_sequence_length, d)
+
+            output.append(QKV)
+
+        return np.array(output)  # shape: (batch_size, max_sequence_length, d)
+
+
+class MultiHeadAttention:
+    def __init__(self, n_heads, d_model):
+        self.n_heads = n_heads
+        self.d_model = d_model
+
+        # Create a list of ScaledDotProductAttention layers for each head
+        self.attention_heads = [ScaledDotProductAttention(d_model, d_model // n_heads) for _ in range(n_heads)]
+
+        # Final linear projection matrix: shape (d_model, d_model)
+        self.W = np.random.uniform(0, 1, (d_model, d_model))
+
+    def forward(self, x):
+
+        """
+        @Params
+        x: (batch_size, max_sequence_length, d_model)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+
+        head_outputs = []  # (n_heads, batch_size, max_sequence_length, d)
+
+        for head in self.attention_heads:
+            head_outputs.append(head.forward(x))  # Each head output: (batch_size, max_sequence_length, head_dim)
+
+        # Concatenate along the last dimension
+        concatenated = np.concatenate(head_outputs, axis=-1)  # shape: (batch_size, max_sequence_length, d_model)
+
+        # Final linear projection
+        output = np.dot(concatenated, self.W)  # shape: (batch_size, max_sequence_length, d_model)
+
+        return output
+
 
 
 if __name__ == '__main__':
@@ -64,16 +146,17 @@ if __name__ == '__main__':
     max_sequence_length = 6
     epochs = 10
     batch_size = 32
-    d_model = 4
+    d_model = 8
 
     input_data = np.random.randint(0, vocab_size, (num_sequences, max_sequence_length))
-
-    print(input_data.shape)
 
     position_embedding = PositionalEmbedding(vocab_size, d_model)
 
     x = position_embedding.forward(input_data)  # x shape is (batch_size, max_sequence_length, d_model)
 
-    print(x.shape)
+    mlh = MultiHeadAttention(n_heads=4, d_model=d_model)
 
-    print(x)
+    mlh_output = mlh.forward(x)
+
+    print(mlh_output.shape)
+    print(mlh_output)
