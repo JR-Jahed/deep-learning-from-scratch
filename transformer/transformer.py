@@ -1,6 +1,6 @@
 import numpy as np
 
-np.set_printoptions(linewidth=1000)
+np.set_printoptions(linewidth=1000, suppress=True)
 
 
 def softmax(x, axis=None):
@@ -137,6 +137,38 @@ class MultiHeadAttention:
         return output
 
 
+class Add:
+    def forward(self, x):
+        """
+        @Params
+        x: a list of two matrices of shape (batch_size, max_sequence_length, d_model)
+        """
+        return x[0] + x[1]  # shape: (batch_size, max_sequence_length, d_model)
+
+
+class LayerNormalisation:
+
+    def __init__(self, d_model, epsilon=1e-6):
+        self.g = np.ones(d_model)
+        self.b = np.zeros(d_model)
+        self.epsilon = epsilon
+
+    def forward(self, x):
+        """
+        @Params
+        x: (batch_size, max_sequence_length, d_model)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+        mean = np.mean(x, axis=-1, keepdims=True)
+        variance = np.var(x, axis=-1, keepdims=True)
+        standard_deviation = np.sqrt(variance + self.epsilon)
+
+        output = self.g * (x - mean) / standard_deviation + self.b
+
+        return output
+
+
 
 if __name__ == '__main__':
 
@@ -153,10 +185,20 @@ if __name__ == '__main__':
     position_embedding = PositionalEmbedding(vocab_size, d_model)
 
     x = position_embedding.forward(input_data)  # x shape is (batch_size, max_sequence_length, d_model)
+    print("x shape: ", x.shape)
+    print(x, "\n\n")
 
-    mlh = MultiHeadAttention(n_heads=4, d_model=d_model)
+    mha = MultiHeadAttention(n_heads=4, d_model=d_model)
+    mha_output = mha.forward(x)
+    print("mha_output shape: ", mha_output.shape)
+    print(mha_output, "\n\n")
 
-    mlh_output = mlh.forward(x)
+    add = Add()
+    add_output = add.forward([x, mha_output])
+    print("add_output shape: ", add_output.shape)
+    print(add_output, "\n\n")
 
-    print(mlh_output.shape)
-    print(mlh_output)
+    layer_normalisation = LayerNormalisation(d_model)
+    layer_normalisation_output = layer_normalisation.forward(add_output)
+    print("layer_normalisation_output shape: ", layer_normalisation_output.shape)
+    print(layer_normalisation_output, "\n\n")
