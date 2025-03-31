@@ -251,6 +251,52 @@ class CrossAttention(BaseAttention):
         return output
 
 
+class Dense:
+    def __init__(self, input_channels, output_channels):
+        self.input_channels = input_channels
+        self.output_channels = output_channels
+        limit = np.sqrt(6.0 / (input_channels + output_channels))
+        self.weights = np.random.uniform(-limit, limit, (input_channels, output_channels))
+        self.biases = np.random.uniform(-limit, limit, output_channels)
+
+    def forward(self, x):
+        """
+        @Params
+        x: (batch_size, max_sequence_length, d_model)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+
+        output = np.dot(x, self.weights) + self.biases
+        return output
+
+
+class FeedForward:
+    def __init__(self, d_model, d_ff):
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.dense1 = Dense(d_model, d_ff)
+        self.dense2 = Dense(d_ff, d_model)
+        self.add = Add()
+        self.layer_normalisation = LayerNormalisation(d_model)
+
+    def forward(self, x):
+        """
+        @Params
+        x: (batch_size, max_sequence_length, d_model)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+
+        output = self.dense1.forward(x)
+        # Perform ReLU
+        output = np.maximum(0, output)
+        output = self.dense2.forward(output)
+        output = self.add.forward([x, output])
+        output = self.layer_normalisation.forward(output)
+        return output
+
+
 
 if __name__ == '__main__':
 
@@ -270,17 +316,27 @@ if __name__ == '__main__':
     print("x shape: ", x.shape)
     print(x, "\n\n")
 
-    mha = MultiHeadAttention(n_heads=4, d_model=d_model)
-    mha_output = mha.forward(x, x, x)
-    print("mha_output shape: ", mha_output.shape)
-    print(mha_output, "\n\n")
+    gsa = GlobalSelfAttention(n_heads=4, d_model=d_model)
+    gsa_output = gsa.forward(x)
+    print("gsa_output shape: ", gsa_output.shape)
+    print(gsa_output, "\n\n")
 
-    add = Add()
-    add_output = add.forward([x, mha_output])
-    print("add_output shape: ", add_output.shape)
-    print(add_output, "\n\n")
+    ff_encoder = FeedForward(d_model=d_model, d_ff=16)
+    ff_encoder_output = ff_encoder.forward(gsa_output)
+    print("ff_encoder_output shape: ", ff_encoder_output.shape)
+    print(ff_encoder_output, "\n\n")
 
-    layer_normalisation = LayerNormalisation(d_model)
-    layer_normalisation_output = layer_normalisation.forward(add_output)
-    print("layer_normalisation_output shape: ", layer_normalisation_output.shape)
-    print(layer_normalisation_output, "\n\n")
+    csa = CausalSelfAttention(n_heads=4, d_model=d_model)
+    csa_output = csa.forward(x)
+    print("csa_output shape: ", csa_output.shape)
+    print(csa_output, "\n\n")
+
+    ca = CrossAttention(n_heads=4, d_model=d_model)
+    ca_output = ca.forward(x=csa_output, context=ff_encoder_output)
+    print("ca_output shape: ", ca_output.shape)
+    print(ca_output, "\n\n")
+
+    ff_decoder = FeedForward(d_model=d_model, d_ff=16)
+    ff_decoder_output = ff_decoder.forward(csa_output)
+    print("ff_decoder_output shape: ", ff_decoder_output.shape)
+    print(ff_decoder_output, "\n\n")
