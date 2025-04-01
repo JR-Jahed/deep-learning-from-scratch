@@ -297,6 +297,96 @@ class FeedForward:
         return output
 
 
+class EncoderLayer:
+    def __init__(self, d_model, n_heads, d_ff):
+        self.self_attention = GlobalSelfAttention(n_heads, d_model)
+        self.feed_forward = FeedForward(d_model, d_ff)
+
+    def forward(self, x):
+        """
+        @Params
+        x: (batch_size, max_sequence_length, d_model)
+        @Returns
+        x: (batch_size, max_sequence_length, d_model)
+        """
+
+        x = self.self_attention.forward(x)
+        x = self.feed_forward.forward(x)
+        return x
+
+class Encoder:
+    def __init__(self, d_model, n_heads, d_ff, n_layers, vocab_size):
+        self.d_model = d_model
+        self.n_layers = n_layers
+
+        self.positional_embedding = PositionalEmbedding(vocab_size, d_model)
+        self.encoder_layers = [EncoderLayer(d_model=d_model, n_heads=n_heads, d_ff=d_ff) for _ in range(n_layers)]
+
+    def forward(self, x):
+        """
+        @Params
+        x: (batch_size, max_sequence_length)
+        @Returns
+        x: (batch_size, max_sequence_length, d_model)
+        """
+        x = self.positional_embedding.forward(x)  # shape: (batch_size, max_sequence_length, d_model)
+
+        for layer in self.encoder_layers:
+            x = layer.forward(x)
+
+        return x
+
+
+class DecoderLayer:
+    def __init__(self, d_model, n_heads, d_ff):
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_ff = d_ff
+
+        self.causal_self_attention = CausalSelfAttention(n_heads, d_model)
+        self.cross_attention = CrossAttention(n_heads, d_model)
+        self.feed_forward = FeedForward(d_model, d_ff)
+
+    def forward(self, x, context):
+        """
+        @Params
+        x: (batch_size, max_sequence_length, d_model)
+        context: (batch_size, max_sequence_length, d_model)
+        @Returns
+        x: (batch_size, max_sequence_length, d_model)
+        """
+
+        x = self.causal_self_attention.forward(x)
+        x = self.cross_attention.forward(x=x, context=context)
+        x = self.feed_forward.forward(x)
+        return x
+
+
+class Decoder:
+    def __init__(self, d_model, n_heads, d_ff, n_layers, vocab_size):
+        self.d_model = d_model
+        self.n_layers = n_layers
+
+        self.positional_embedding = PositionalEmbedding(vocab_size, d_model)
+        self.decoder_layers = [DecoderLayer(d_model, n_heads, d_ff) for _ in range(n_layers)]
+
+    def forward(self, x, context):
+        """
+        @Params
+        x: (batch_size, max_sequence_length)
+        context: (batch_size, max_sequence_length, d_model)
+        @Returns
+        x: (batch_size, max_sequence_length, d_model)
+        """
+
+        x = self.positional_embedding.forward(x)  # shape: (batch_size, max_sequence_length, d_model)
+
+        for layer in self.decoder_layers:
+            x = layer.forward(x, context)
+
+        return x
+
+
 
 if __name__ == '__main__':
 
@@ -310,33 +400,13 @@ if __name__ == '__main__':
 
     input_data = np.random.randint(0, vocab_size, (num_sequences, max_sequence_length))
 
-    position_embedding = PositionalEmbedding(vocab_size, d_model)
+    encoder = Encoder(d_model=d_model, n_heads=8, d_ff=16, n_layers=3, vocab_size=vocab_size)
+    decoder = Decoder(d_model=d_model, n_heads=8, d_ff=16, n_layers=3, vocab_size=vocab_size)
 
-    x = position_embedding.forward(input_data)  # x shape is (batch_size, max_sequence_length, d_model)
-    print("x shape: ", x.shape)
-    print(x, "\n\n")
+    context = encoder.forward(input_data)
+    print("context shape: ", context.shape)
+    print(context, "\n\n")
 
-    gsa = GlobalSelfAttention(n_heads=4, d_model=d_model)
-    gsa_output = gsa.forward(x)
-    print("gsa_output shape: ", gsa_output.shape)
-    print(gsa_output, "\n\n")
-
-    ff_encoder = FeedForward(d_model=d_model, d_ff=16)
-    ff_encoder_output = ff_encoder.forward(gsa_output)
-    print("ff_encoder_output shape: ", ff_encoder_output.shape)
-    print(ff_encoder_output, "\n\n")
-
-    csa = CausalSelfAttention(n_heads=4, d_model=d_model)
-    csa_output = csa.forward(x)
-    print("csa_output shape: ", csa_output.shape)
-    print(csa_output, "\n\n")
-
-    ca = CrossAttention(n_heads=4, d_model=d_model)
-    ca_output = ca.forward(x=csa_output, context=ff_encoder_output)
-    print("ca_output shape: ", ca_output.shape)
-    print(ca_output, "\n\n")
-
-    ff_decoder = FeedForward(d_model=d_model, d_ff=16)
-    ff_decoder_output = ff_decoder.forward(csa_output)
-    print("ff_decoder_output shape: ", ff_decoder_output.shape)
-    print(ff_decoder_output, "\n\n")
+    output = decoder.forward(input_data, context)
+    print("output shape: ", output.shape)
+    print(output, "\n\n")
