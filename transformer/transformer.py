@@ -387,26 +387,58 @@ class Decoder:
         return x
 
 
+class Transformer:
+    def __init__(self, d_model, n_heads, d_ff, n_layers, input_vocab_size, target_vocab_size):
+        self.d_model = d_model
+        self.n_layers = n_layers
+
+        self.encoder = Encoder(d_model=d_model, n_heads=n_heads, d_ff=d_ff, n_layers=n_layers, vocab_size=input_vocab_size)
+        self.decoder = Decoder(d_model=d_model, n_heads=n_heads, d_ff=d_ff, n_layers=n_layers, vocab_size=target_vocab_size)
+
+        self.final_layer = Dense(d_model, target_vocab_size)
+
+    def forward(self, inputs):
+        """
+        @Params
+        inputs: A tuple of two sequences of shape (batch_size, max_sequence_length)
+        @Returns
+        logits: (batch_size, max_sequence_length, target_vocab_size)
+        """
+
+        context, x = inputs
+
+        context = self.encoder.forward(context)
+
+        x = self.decoder.forward(x, context)
+
+        logits = self.final_layer.forward(x)
+
+        return logits
+
+
 
 if __name__ == '__main__':
 
-    vocab_size = 10
-    embedding_dim = 32
+    input_vocab_size = 10
+    target_vocab_size = 15
     num_sequences = 5
     max_sequence_length = 6
     epochs = 10
     batch_size = 32
     d_model = 8
 
-    input_data = np.random.randint(0, vocab_size, (num_sequences, max_sequence_length))
+    input_data = np.random.randint(0, input_vocab_size, (num_sequences, max_sequence_length))
+    target_data = np.random.randint(0, target_vocab_size, (num_sequences, max_sequence_length))
 
-    encoder = Encoder(d_model=d_model, n_heads=8, d_ff=16, n_layers=3, vocab_size=vocab_size)
-    decoder = Decoder(d_model=d_model, n_heads=8, d_ff=16, n_layers=3, vocab_size=vocab_size)
+    for i in range(num_sequences):
+        print(input_data[i], "  ", target_data[i])
+    print("\n\n")
 
-    context = encoder.forward(input_data)
-    print("context shape: ", context.shape)
-    print(context, "\n\n")
+    transformer = Transformer(d_model=d_model, n_heads=8, d_ff=16, n_layers=3, input_vocab_size=input_vocab_size, target_vocab_size=target_vocab_size)
+    output = transformer.forward((input_data, target_data))
 
-    output = decoder.forward(input_data, context)
     print("output shape: ", output.shape)
     print(output, "\n\n")
+
+    probabilities = softmax(output, axis=-1)
+    print(probabilities)
