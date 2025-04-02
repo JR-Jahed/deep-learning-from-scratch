@@ -3,11 +3,52 @@ import numpy as np
 np.set_printoptions(linewidth=1000, suppress=True)
 
 
-def softmax(x, axis=None):
+def softmax(x, axis=-1):
     # Subtract max for numerical stability
     x = x - np.max(x, axis=axis, keepdims=True)
     exp_x = np.exp(x)
     return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
+
+
+def cross_entropy_loss(probabilities, target):
+    """
+    Computes the sequence-to-sequence loss.
+
+    @Params:
+    probabilities: (batch_size, max_sequence_length, target_vocab_size) - predicted scores
+    target: (batch_size, max_sequence_length) - actual token indices
+
+    @Returns:
+    loss: Scalar loss value
+    """
+
+    batch_size, seq_length, vocab_size = probabilities.shape
+
+    # Extract the probability of the correct token at each position
+    correct_probabilities = probabilities[np.arange(batch_size)[:, None], np.arange(seq_length), target]
+
+    # Compute the negative log-likelihood
+    loss = -np.log(correct_probabilities)
+
+    # Compute mean loss over all tokens
+    return np.mean(loss)
+
+
+def cross_entropy_gradient(probabilities, target):
+    """
+    @Params:
+    probabilities: (batch_size, max_sequence_length, target_vocab_size) - predicted scores
+    target: (batch_size, max_sequence_length) - actual token indices
+
+    @Returns:
+    gradients: (batch_size, max_sequence_length, target_vocab_size)
+    """
+
+    batch_size, seq_length, vocab_size = probabilities.shape
+    gradient = probabilities.copy()
+    gradient[np.arange(batch_size)[:, None], np.arange(seq_length), target] -= 1
+
+    return gradient
 
 
 class Embedding:
@@ -415,6 +456,19 @@ class Transformer:
 
         return logits
 
+    def backward(self, input_data, target_data):
+        logits = self.forward((input_data, target_data))
+
+        probabilities = softmax(logits)
+
+        loss = cross_entropy_loss(probabilities, target_data)
+        gradient = cross_entropy_gradient(probabilities, target_data)
+
+        return loss
+
+    def fit(self, input_data, target_data):
+        loss = self.backward(input_data, target_data)
+
 
 
 if __name__ == '__main__':
@@ -434,11 +488,5 @@ if __name__ == '__main__':
         print(input_data[i], "  ", target_data[i])
     print("\n\n")
 
-    transformer = Transformer(d_model=d_model, n_heads=8, d_ff=16, n_layers=3, input_vocab_size=input_vocab_size, target_vocab_size=target_vocab_size)
-    output = transformer.forward((input_data, target_data))
-
-    print("output shape: ", output.shape)
-    print(output, "\n\n")
-
-    probabilities = softmax(output, axis=-1)
-    print(probabilities)
+    transformer = Transformer(d_model=d_model, n_heads=4, d_ff=16, n_layers=3, input_vocab_size=input_vocab_size, target_vocab_size=target_vocab_size)
+    transformer.fit(input_data, target_data)
