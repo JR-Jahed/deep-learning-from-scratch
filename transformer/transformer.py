@@ -52,15 +52,39 @@ def cross_entropy_gradient(probabilities, target):
 
 
 class Embedding:
-    def __init__(self, vocab_size, embedding_dim):
+
+    # d_model is embedding dimension
+    # Let's call it d_model instead of embedding dimension for consistency
+
+    def __init__(self, vocab_size, d_model):
         self.vocab_size = vocab_size
-        self.embedding_dim = embedding_dim
-        self.embeddings = np.random.randn(vocab_size, embedding_dim) * 0.01
+        self.d_model = d_model
+        self.embeddings = np.random.randn(vocab_size, d_model) * 0.01
         self.input = None
 
     def forward(self, x):
+        """
+        @Params:
+        x: (batch_size, max_sequence_length)
+        @Returns:
+        output: (batch_size, max_sequence_length, d_model)
+        """
         self.input = x
         return self.embeddings[x]
+    
+    def backward(self, gradient, learning_rate):
+        """
+        @Params:
+        gradient: (batch_size, max_sequence_length, d_model)
+        learning_rate: float
+        """
+        
+        unique_tokens = np.unique(self.input)  # Get unique token indices
+
+        # Accumulate gradients for each unique token
+        for token in unique_tokens:
+            mask = self.input == token  # Mask for token occurrences
+            self.embeddings[token] -= learning_rate * np.sum(gradient[mask], axis=0)
 
 
 def positional_encoding(length, depth):
@@ -105,6 +129,26 @@ class PositionalEmbedding:
 
         return output
 
+    def backward(self, gradient, learning_rate):
+        """
+        @Param:
+        gradient: (batch_size, max_sequence_length, d_model)
+        learning_rate: float
+
+        @Returns:
+        None (updates the embedding weights)
+        """
+        # Backpropagate through the addition:
+        # Since positional encoding is constant, its gradient is 0.
+        # Only the scaled embedding part needs to propagate the gradient.
+
+        # The forward pass did: output = sqrt(d_model) * embedding_output + constant
+        # Thus, d(embedding_output)/d(output) = sqrt(d_model)
+        gradient_embedding = gradient * np.sqrt(float(self.d_model))
+
+        # Pass the gradient to the embedding layer's backward function.
+        self.embedding.backward(gradient_embedding, learning_rate)
+
 
 class ScaledDotProductAttention:
     def __init__(self, d_model, d):
@@ -117,7 +161,6 @@ class ScaledDotProductAttention:
         self.WV = np.random.uniform(0, 1, (d_model, d))
 
     def forward(self, query, key, value, use_causal_mask=False):
-
         """
         @Params
         query: (batch_size, max_sequence_length, d_model)
@@ -128,52 +171,100 @@ class ScaledDotProductAttention:
         output: (batch_size, max_sequence_length, d)
         """
 
-        batch_size = key.shape[0]
+        self.query = query
+        self.key = key
+        self.value = value
 
-        output = []  # List to store the output for each sample in the batch
+        self.Q = np.dot(query, self.WQ)  # shape: (batch_size, max_sequence_length, d)
+        self.K = np.dot(key, self.WK)  # shape: (batch_size, max_sequence_length, d)
+        self.V = np.dot(value, self.WV)  # shape: (batch_size, max_sequence_length, d)
 
-        for i in range(batch_size):
-            # Linear projections for Q, K, V
-            Q = np.dot(query[i], self.WQ)  # shape: (max_sequence_length, d)
-            K = np.dot(key[i], self.WK)  # shape: (max_sequence_length, d)
-            V = np.dot(value[i], self.WV)  # shape: (max_sequence_length, d)
+        # Compute scaled dot product
+        QK = np.matmul(self.Q, self.K.transpose(0, 2, 1))  # shape: (batch_size, max_sequence_length, max_sequence_length)
+        QK /= np.sqrt(self.d)
 
-            # Compute scaled dot product
-            QK = np.dot(Q, K.T)  # shape: (max_sequence_length, max_sequence_length)
-            QK /= np.sqrt(self.d)
+        # If causal mask is true, mask out future tokens for each token position.
+        if use_causal_mask:
+            # Create a mask: 1s in upper triangular (excluding main diagonal), then multiply by -inf.
+            mask = np.triu(np.ones_like(QK), k=1) * (-1e9)
+            QK = QK + mask
 
-            # If causal mask is true, mask out future tokens for each token position.
-            if use_causal_mask:
-                # Create a mask: 1s in upper triangular (excluding main diagonal), then multiply by -inf.
-                mask = np.triu(np.ones_like(QK), k=1) * (-1e9)
-                QK = QK + mask
+        # Apply softmax
+        self.A = softmax(QK, axis=-1)
 
-            # Apply softmax
-            QK = softmax(QK, axis=-1)
+        output = np.matmul(QK, self.V)
 
-            QKV = np.dot(QK, V)  # shape: (max_sequence_length, d)
+        return output  # shape: (batch_size, max_sequence_length, d)
 
-            output.append(QKV)
+    def backward(self, gradient, learning_rate):
+        """
+        @Param:
+        gradient: (batch_size, max_sequence_length, d)
+        learning_rate: float
 
-        return np.array(output)  # shape: (batch_size, max_sequence_length, d)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+
+        scale = 1 / np.sqrt(self.d)
+
+        # --- Backprop through final multiplication: output = A . V ---
+        # d_output/dV: gradient flows via V
+        gradient_V = np.matmul(self.A.transpose(0, 2, 1), gradient)  # shape: (batch_size, max_sequence_length, d)
+
+        # Gradient with respect to A:
+        gradient_A = np.matmul(gradient, self.V.transpose(0, 2, 1))  # shape: (batch_size, max_sequence_length, max_sequence_length)
+
+        # --- Backprop through softmax ---
+        # For softmax, derivative is: dZ = A * (dA - sum(dA * A, axis=-1, keepdims=True))
+        sum_gradient_A_A = np.sum(gradient_A * self.A, axis=-1, keepdims=True)  # shape: (batch_size, max_sequence_length, 1)
+        gradient_QK = self.A * (gradient_A - sum_gradient_A_A)  # shape: (batch_size, max_sequence_length, max_sequence_length)
+
+        # --- Backprop through scaling ---
+        gradient_QK *= scale
+
+        # --- Backprop through the dot product QK = Q . K^T ---
+        # Gradient with respect to Q and K:
+        gradient_Q = np.matmul(gradient_QK, self.K)  # shape: (batch_size, max_sequence_length, d)
+        gradient_K = np.matmul(gradient_QK.transpose(0, 2, 1), self.Q)  # shape: (batch_size, max_sequence_length, d)
+
+        # --- Backprop through linear projections ---
+        # For Q = query . WQ, gradients:
+        gradient_WQ = np.sum(np.matmul(self.query.transpose(0, 2, 1), gradient_Q), axis=0)  # shape: (d_model, d)
+        gradient_query = np.matmul(gradient_Q, self.WQ.T)  # shape: (batch_size, max_sequence_length, d_model)
+
+        # For K = key . WK:
+        gradient_WK = np.sum(np.matmul(self.key.transpose(0, 2, 1), gradient_K), axis=0)  # shape: (d_model, d)
+        gradient_key = np.matmul(gradient_K, self.WK.T)  # shape: (batch_size, max_sequence_length, d_model)
+
+        # For V = value . WV:
+        gradient_WV = np.sum(np.matmul(self.value.transpose(0, 2, 1), gradient_V), axis=0)  # shape: (d_model, d)
+        gradient_value = np.matmul(gradient_V, self.WV.T)  # shape: (batch_size, max_sequence_length, d_model)
+
+        self.WQ -= learning_rate * gradient_WQ
+        self.WK -= learning_rate * gradient_WK
+        self.WV -= learning_rate * gradient_WV
+
+        return gradient_query, gradient_key, gradient_value
 
 
 class MultiHeadAttention:
     def __init__(self, n_heads, d_model):
+        self.concatenated = None
         self.n_heads = n_heads
         self.d_model = d_model
+        self.head_dim = d_model // n_heads
 
         # Create a list of ScaledDotProductAttention layers for each head
-        self.attention_heads = [ScaledDotProductAttention(d_model, d_model // n_heads) for _ in range(n_heads)]
+        self.attention_heads = [ScaledDotProductAttention(d_model, self.head_dim) for _ in range(n_heads)]
 
         # Final linear projection matrix: shape (d_model, d_model)
         self.W = np.random.uniform(0, 1, (d_model, d_model))
 
     def forward(self, query, key, value, use_causal_mask=False):
-
         """
         @Params
-        x: (batch_size, max_sequence_length, d_model)
+        query, key, value: (batch_size, max_sequence_length, d_model)
         @Returns
         output: (batch_size, max_sequence_length, d_model)
         """
@@ -184,12 +275,42 @@ class MultiHeadAttention:
             head_outputs.append(head.forward(query, key, value, use_causal_mask))  # Each head output: (batch_size, max_sequence_length, head_dim)
 
         # Concatenate along the last dimension
-        concatenated = np.concatenate(head_outputs, axis=-1)  # shape: (batch_size, max_sequence_length, d_model)
+        self.concatenated = np.concatenate(head_outputs, axis=-1)  # shape: (batch_size, max_sequence_length, d_model)
 
         # Final linear projection
-        output = np.dot(concatenated, self.W)  # shape: (batch_size, max_sequence_length, d_model)
+        output = np.dot(self.concatenated, self.W)  # shape: (batch_size, max_sequence_length, d_model)
 
         return output
+
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+
+        @Returns
+        gradient: (batch_size, max_sequence_length, d_model)
+        """
+
+        gradient_weights = np.dot(self.concatenated.reshape(-1, self.d_model).T, gradient.reshape(-1, self.d_model))
+        self.W -= learning_rate * gradient_weights
+
+        # Gradient with respect to the concatenated output
+        gradient_concatenated = np.dot(gradient, self.W.T)
+
+        # Split gradient into each head's gradient
+        gradient_heads = np.split(gradient_concatenated, self.n_heads, axis=-1)  # shape (batch_size, max_sequence_length, head_dim)
+
+        gradient_query = 0
+        gradient_key = 0
+        gradient_value = 0
+
+        for i, head in enumerate(self.attention_heads):
+            gradient_q, gradient_k, gradient_v = head.backward(gradient_heads[i], learning_rate)
+            gradient_query += gradient_q
+            gradient_key += gradient_k
+            gradient_value += gradient_v
+
+        return gradient_query, gradient_key, gradient_value
 
 
 class Add:
@@ -200,10 +321,26 @@ class Add:
         """
         return x[0] + x[1]  # shape: (batch_size, max_sequence_length, d_model)
 
+    def backward(self, gradient, learning_rate):
+        """
+        This function passes the same gradient it receives. It's not even necessary.
+        Just added for consistency.
+
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+        @Returns
+        gradients: a list of gradients corresponding to x[0] and x[1]
+        """
+
+        return [gradient, gradient]
+
 
 class LayerNormalisation:
-
     def __init__(self, d_model, epsilon=1e-6):
+        self.normalised = None
+        self.standard_deviation = None
+        self.variance = None
+        self.mean = None
         self.g = np.ones(d_model)
         self.b = np.zeros(d_model)
         self.epsilon = epsilon
@@ -215,12 +352,138 @@ class LayerNormalisation:
         @Returns
         output: (batch_size, max_sequence_length, d_model)
         """
-        mean = np.mean(x, axis=-1, keepdims=True)
-        variance = np.var(x, axis=-1, keepdims=True)
-        standard_deviation = np.sqrt(variance + self.epsilon)
+        self.mean = np.mean(x, axis=-1, keepdims=True)  # shape: (batch_size, max_sequence_length, 1)
+        self.variance = np.var(x, axis=-1, keepdims=True)  # shape: (batch_size, max_sequence_length, 1)
+        self.standard_deviation = np.sqrt(self.variance + self.epsilon)  # shape: (batch_size, max_sequence_length, 1)
 
-        output = self.g * (x - mean) / standard_deviation + self.b
+        self.normalised = (x - self.mean) / self.standard_deviation  # shape: (batch_size, max_sequence_length, d_model)
+
+        output = self.g * self.normalised + self.b
         return output
+
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+        @Returns
+        gradient: (batch_size, max_sequence_length, d_model)
+        """
+
+        gradient_g = np.sum(gradient * self.normalised, axis=(0, 1))  # shape: (d_model,)
+        gradient_b = np.sum(gradient, axis=(0, 1))  # shape: (d_model,)
+
+        self.g -= learning_rate * gradient_g
+        self.b -= learning_rate * gradient_b
+
+        gradient_normalised = gradient * self.g  # shape: (batch_size, max_sequence_length, d_model)
+
+        # Following the formula for the gradient of layer norm:
+        # d_x = (1/σ) * (d_normalized - mean(d_normalized) - normalized * mean(d_normalized * normalized))
+        mean_gradient_normalised = np.mean(gradient_normalised, axis=-1, keepdims=True)  # shape: (batch_size, max_sequence_length, 1)
+        mean_gradient_normalised_normalised = np.mean(gradient_normalised * self.normalised, axis=-1, keepdims=True)  # shape (batch_size, max_sequence_length, 1)
+
+        gradient_input = (1.0 / self.standard_deviation) * (gradient_normalised - mean_gradient_normalised - self.normalised * mean_gradient_normalised_normalised)
+
+        return gradient_input
+
+
+class Dense:
+    def __init__(self, input_channels, output_channels):
+        self.input = None
+        self.input_channels = input_channels
+        self.output_channels = output_channels
+        limit = np.sqrt(6.0 / (input_channels + output_channels))
+        self.weights = np.random.uniform(-limit, limit, (input_channels, output_channels))
+        self.biases = np.zeros(output_channels)
+
+    def forward(self, x):
+        """
+        @Params
+        x: (batch_size, max_sequence_length, input_channels)
+        @Returns
+        output: (batch_size, max_sequence_length, output_channels)
+        """
+
+        self.input = x
+
+        output = np.dot(x, self.weights) + self.biases
+        return output
+
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, output_channels)
+        @Returns
+        output: (batch_size, max_sequence_length, input_channels)
+        """
+
+        input_gradient = np.dot(gradient, self.weights.T)
+
+        weight_gradient = np.dot(gradient.reshape(-1, self.output_channels).T, self.input.reshape(-1, self.input_channels)).T
+
+        bias_gradient = np.sum(gradient, axis=(0, 1))
+
+        self.weights -= learning_rate * weight_gradient
+        self.biases -= learning_rate * bias_gradient
+
+        return input_gradient
+
+
+class FeedForward:
+    def __init__(self, d_model, d_ff):
+        self.relu_mask = None
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.dense1 = Dense(d_model, d_ff)
+        self.dense2 = Dense(d_ff, d_model)
+        self.add = Add()
+        self.layer_normalisation = LayerNormalisation(d_model)
+
+    def forward(self, x):
+        """
+        @Params
+        x: (batch_size, max_sequence_length, d_model)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+
+        out1 = self.dense1.forward(x)  # shape: (batch_size, max_sequence_length, d_ff)
+        relu_out = np.maximum(0, out1)  # ReLU activation
+        self.relu_mask = (out1 > 0)  # Cache mask for ReLU
+        out2 = self.dense2.forward(relu_out)  # shape: (batch_size, max_sequence_length, d_model)
+        add_out = self.add.forward([x, out2])  # Residual addition
+        final_out = self.layer_normalisation.forward(add_out)  # shape: (batch_size, max_sequence_length, d_model)
+        return final_out
+
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+
+        # 1. Backprop through Layer Normalisation
+        gradient_add = self.layer_normalisation.backward(gradient, learning_rate)  # shape: (batch_size, max_sequence_length, d_model)
+
+        # 2. Backprop through the addition layer: it splits the gradient equally to both inputs.
+        gradient_x_res, gradient_out2 = self.add.backward(gradient_add, learning_rate)  # each of shape: (batch_size, max_sequence_length, d_model)
+
+        # 3. Backprop through Dense2.
+        # gradient_out2 is gradient with respect to Dense2 output.
+        # dense2.backward returns gradient with respect to its input (i.e., relu_out)
+        gradient_relu = self.dense2.backward(gradient_out2, learning_rate)  # shape: (batch_size, max_sequence_length, d_ff)
+
+        # 4. Backprop through ReLU.
+        # The derivative of ReLU is 1 for positive out1, 0 otherwise.
+        gradient_out1 = gradient_relu * self.relu_mask  # shape: (batch_size, max_sequence_length, d_ff)
+
+        # 5. Backprop through Dense1.
+        # dense1.backward returns gradient with respect to its input x.
+        gradient_x_dense = self.dense1.backward(gradient_out1, learning_rate)  # shape: (batch_size, max_sequence_length, d_model)
+
+        gradient_input = gradient_x_res + gradient_x_dense  # shape: (batch_size, max_sequence_length, d_model)
+        return gradient_input
 
 
 class BaseAttention:
@@ -230,6 +493,7 @@ class BaseAttention:
         self.mha = MultiHeadAttention(n_heads, d_model)
         self.add = Add()
         self.layer_normalisation = LayerNormalisation(d_model)
+
 
 """
 This is the self-attention layer of encoder
@@ -249,6 +513,22 @@ class GlobalSelfAttention(BaseAttention):
         output = self.add.forward([x, attention_output])
         output = self.layer_normalisation.forward(output)
         return output
+
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+        @Returns
+        gradient_x: (batch_size, max_sequence_length, d_model)
+        """
+
+        gradient = self.layer_normalisation.backward(gradient, learning_rate)
+
+        # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
+        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
+
+        # Sum the three gradients
+        return gradient_query + gradient_key + gradient_value
 
 
 """
@@ -270,6 +550,22 @@ class CausalSelfAttention(BaseAttention):
         output = self.layer_normalisation.forward(output)
         return output
 
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+        @Returns
+        gradient_x: (batch_size, max_sequence_length, d_model)
+        """
+
+        gradient = self.layer_normalisation.backward(gradient, learning_rate)
+
+        # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
+        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
+
+        # Sum the three gradients
+        return gradient_query + gradient_key + gradient_value
+
 
 """
 This attention layer is part of decoder, but it connects encoder and decoder
@@ -290,52 +586,23 @@ class CrossAttention(BaseAttention):
         output = self.add.forward([x, attention_output])
         output = self.layer_normalisation.forward(output)
         return output
-
-
-class Dense:
-    def __init__(self, input_channels, output_channels):
-        self.input_channels = input_channels
-        self.output_channels = output_channels
-        limit = np.sqrt(6.0 / (input_channels + output_channels))
-        self.weights = np.random.uniform(-limit, limit, (input_channels, output_channels))
-        self.biases = np.random.uniform(-limit, limit, output_channels)
-
-    def forward(self, x):
+    
+    def backward(self, gradient, learning_rate):
         """
         @Params
-        x: (batch_size, max_sequence_length, d_model)
+        gradient: (batch_size, max_sequence_length, d_model)
         @Returns
-        output: (batch_size, max_sequence_length, d_model)
+        gradient_x: (batch_size, max_sequence_length, d_model)
+        gradient_context: (batch_size, max_sequence_length, d_model)
         """
+        
+        gradient = self.layer_normalisation.backward(gradient, learning_rate)
 
-        output = np.dot(x, self.weights) + self.biases
-        return output
+        # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
+        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
 
-
-class FeedForward:
-    def __init__(self, d_model, d_ff):
-        self.d_model = d_model
-        self.d_ff = d_ff
-        self.dense1 = Dense(d_model, d_ff)
-        self.dense2 = Dense(d_ff, d_model)
-        self.add = Add()
-        self.layer_normalisation = LayerNormalisation(d_model)
-
-    def forward(self, x):
-        """
-        @Params
-        x: (batch_size, max_sequence_length, d_model)
-        @Returns
-        output: (batch_size, max_sequence_length, d_model)
-        """
-
-        output = self.dense1.forward(x)
-        # Perform ReLU
-        output = np.maximum(0, output)
-        output = self.dense2.forward(output)
-        output = self.add.forward([x, output])
-        output = self.layer_normalisation.forward(output)
-        return output
+        # Summing the gradients of key and value yields gradient of context
+        return gradient_query, gradient_key + gradient_value
 
 
 class EncoderLayer:
@@ -354,6 +621,18 @@ class EncoderLayer:
         x = self.self_attention.forward(x)
         x = self.feed_forward.forward(x)
         return x
+    
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+        gradient = self.feed_forward.backward(gradient, learning_rate)
+        gradient = self.self_attention.backward(gradient, learning_rate)
+        return gradient
+
 
 class Encoder:
     def __init__(self, d_model, n_heads, d_ff, n_layers, vocab_size):
@@ -377,6 +656,21 @@ class Encoder:
 
         return x
 
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+        @Returns
+        output: (batch_size, max_sequence_length, d_model)
+        """
+        
+        for layer in reversed(self.encoder_layers):
+            gradient = layer.backward(gradient, learning_rate)
+        
+        self.positional_embedding.backward(gradient, learning_rate)
+        
+        return gradient
+
 
 class DecoderLayer:
     def __init__(self, d_model, n_heads, d_ff):
@@ -391,8 +685,8 @@ class DecoderLayer:
     def forward(self, x, context):
         """
         @Params
-        x: (batch_size, max_sequence_length, d_model)
-        context: (batch_size, max_sequence_length, d_model)
+        x: (batch_size, max_sequence_length, d_model)    comes from positional embedding of decoder
+        context: (batch_size, max_sequence_length, d_model)    comes from encoder
         @Returns
         x: (batch_size, max_sequence_length, d_model)
         """
@@ -401,6 +695,28 @@ class DecoderLayer:
         x = self.cross_attention.forward(x=x, context=context)
         x = self.feed_forward.forward(x)
         return x
+
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+        @Returns
+        gradient_x_causal_self_attention: (batch_size, max_sequence_length, d_model)
+        gradient_context: (batch_size, max_sequence_length, d_model)
+        """
+        gradient = self.feed_forward.backward(gradient, learning_rate)
+
+        # During forward pass, there were two inputs, x and context, which came from positional embedding
+        # of decoder, and encoder respectively. Therefore, during backpropagation we calculate their gradients
+        # and pass gradient of context to decoder layer which passes it to encoder because it came from
+        # encoder, and gradient of x to positional embedding of decoder because it came from that layer.
+
+        gradient_x_cross_attention, gradient_context = self.cross_attention.backward(gradient, learning_rate)
+
+        # Gradient of input that goes into causal self-attention
+        gradient_x_causal_self_attention = self.causal_self_attention.backward(gradient_x_cross_attention, learning_rate)
+
+        return gradient_x_causal_self_attention, gradient_context
 
 
 class Decoder:
@@ -415,7 +731,7 @@ class Decoder:
         """
         @Params
         x: (batch_size, max_sequence_length)
-        context: (batch_size, max_sequence_length, d_model)
+        context: (batch_size, max_sequence_length, d_model)    comes from encoder
         @Returns
         x: (batch_size, max_sequence_length, d_model)
         """
@@ -426,6 +742,26 @@ class Decoder:
             x = layer.forward(x, context)
 
         return x
+
+    def backward(self, gradient, learning_rate):
+        """
+        @Params
+        gradient: (batch_size, max_sequence_length, d_model)
+
+        @Returns
+        gradient_context: (batch_size, max_sequence_length, d_model)
+        """
+
+        # We need to pass this to encoder. It's the summation of the gradients of context of all the cross attention layers
+        gradient_context = 0
+        
+        for layer in reversed(self.decoder_layers):
+            gradient_x, gradient_context_ = layer.backward(gradient, learning_rate)
+            gradient_context += gradient_context_
+
+        self.positional_embedding.backward(gradient, learning_rate)
+
+        return gradient_context
 
 
 class Transformer:
@@ -456,18 +792,31 @@ class Transformer:
 
         return logits
 
-    def backward(self, input_data, target_data):
+    def backward(self, input_data, target_data, learning_rate):
         logits = self.forward((input_data, target_data))
 
         probabilities = softmax(logits)
 
         loss = cross_entropy_loss(probabilities, target_data)
-        gradient = cross_entropy_gradient(probabilities, target_data)
+
+        gradient_for_final_layer = cross_entropy_gradient(probabilities, target_data)  # shape: (batch_size, max_sequence_length, target_vocab_size)
+        print("gradient_for_final_layer", gradient_for_final_layer.shape)
+        print(gradient_for_final_layer, "\n\n")
+
+        gradient_for_decoder = self.final_layer.backward(gradient_for_final_layer, learning_rate)  # shape: (batch_size, max_sequence_length, d_model)
+        print("gradient_for_decoder: ", gradient_for_decoder.shape)
+        print(gradient_for_decoder, "\n\n")
+
+        gradient_for_encoder= self.decoder.backward(gradient_for_decoder, learning_rate)  # shape: (batch_size, max_sequence_length, d_model)
+        print("gradient_for_encoder: ", gradient_for_encoder.shape)
+        print(gradient_for_encoder, "\n\n")
+
+        self.encoder.backward(gradient_for_encoder, learning_rate)
 
         return loss
 
     def fit(self, input_data, target_data):
-        loss = self.backward(input_data, target_data)
+        loss = self.backward(input_data, target_data, .1)
 
 
 
