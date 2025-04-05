@@ -1,3 +1,4 @@
+import time
 import numpy as np
 
 np.set_printoptions(linewidth=1000, suppress=True)
@@ -59,7 +60,7 @@ class Embedding:
     def __init__(self, vocab_size, d_model):
         self.vocab_size = vocab_size
         self.d_model = d_model
-        self.embeddings = np.random.randn(vocab_size, d_model) * 0.01
+        self.embeddings = np.random.uniform(0, 1, (vocab_size, d_model))
         self.input = None
 
     def forward(self, x):
@@ -156,9 +157,11 @@ class ScaledDotProductAttention:
         self.d_model = d_model
         self.d = d
 
-        self.WQ = np.random.uniform(0, 1, (d_model, d))
-        self.WK = np.random.uniform(0, 1, (d_model, d))
-        self.WV = np.random.uniform(0, 1, (d_model, d))
+        limit = np.sqrt(6 / (d_model + d))
+
+        self.WQ = np.random.uniform(-limit, limit, (d_model, d))
+        self.WK = np.random.uniform(-limit, limit, (d_model, d))
+        self.WV = np.random.uniform(-limit, limit, (d_model, d))
 
     def forward(self, query, key, value, use_causal_mask=False):
         """
@@ -192,7 +195,7 @@ class ScaledDotProductAttention:
         # Apply softmax
         self.A = softmax(QK, axis=-1)
 
-        output = np.matmul(QK, self.V)
+        output = np.matmul(self.A, self.V)
 
         return output  # shape: (batch_size, max_sequence_length, d)
 
@@ -258,8 +261,10 @@ class MultiHeadAttention:
         # Create a list of ScaledDotProductAttention layers for each head
         self.attention_heads = [ScaledDotProductAttention(d_model, self.head_dim) for _ in range(n_heads)]
 
+        limit = np.sqrt(6 / (d_model + d_model))
+
         # Final linear projection matrix: shape (d_model, d_model)
-        self.W = np.random.uniform(0, 1, (d_model, d_model))
+        self.W = np.random.uniform(-limit, limit, (d_model, d_model))
 
     def forward(self, query, key, value, use_causal_mask=False):
         """
@@ -635,7 +640,7 @@ class EncoderLayer:
 
 
 class Encoder:
-    def __init__(self, d_model, n_heads, d_ff, n_layers, vocab_size):
+    def __init__(self, d_model, n_layers, n_heads, d_ff, vocab_size):
         self.d_model = d_model
         self.n_layers = n_layers
 
@@ -720,7 +725,7 @@ class DecoderLayer:
 
 
 class Decoder:
-    def __init__(self, d_model, n_heads, d_ff, n_layers, vocab_size):
+    def __init__(self, d_model, n_layers, n_heads, d_ff, vocab_size):
         self.d_model = d_model
         self.n_layers = n_layers
 
@@ -765,12 +770,12 @@ class Decoder:
 
 
 class Transformer:
-    def __init__(self, d_model, n_heads, d_ff, n_layers, input_vocab_size, target_vocab_size):
+    def __init__(self, d_model, n_layers, n_heads, d_ff, input_vocab_size, target_vocab_size):
         self.d_model = d_model
         self.n_layers = n_layers
 
-        self.encoder = Encoder(d_model=d_model, n_heads=n_heads, d_ff=d_ff, n_layers=n_layers, vocab_size=input_vocab_size)
-        self.decoder = Decoder(d_model=d_model, n_heads=n_heads, d_ff=d_ff, n_layers=n_layers, vocab_size=target_vocab_size)
+        self.encoder = Encoder(d_model=d_model, n_layers=n_layers, n_heads=n_heads, d_ff=d_ff, vocab_size=input_vocab_size)
+        self.decoder = Decoder(d_model=d_model, n_layers=n_layers, n_heads=n_heads, d_ff=d_ff, vocab_size=target_vocab_size)
 
         self.final_layer = Dense(d_model, target_vocab_size)
 
@@ -793,6 +798,15 @@ class Transformer:
         return logits
 
     def backward(self, input_data, target_data, learning_rate):
+        """
+        @Params
+        input_data: (batch_size, max_sequence_length)
+        target_data: (batch_size, max_sequence_length)
+        learning_rate: scalar
+        @Returns
+        loss: scalar
+        """
+
         logits = self.forward((input_data, target_data))
 
         probabilities = softmax(logits)
@@ -800,24 +814,49 @@ class Transformer:
         loss = cross_entropy_loss(probabilities, target_data)
 
         gradient_for_final_layer = cross_entropy_gradient(probabilities, target_data)  # shape: (batch_size, max_sequence_length, target_vocab_size)
-        print("gradient_for_final_layer", gradient_for_final_layer.shape)
-        print(gradient_for_final_layer, "\n\n")
+        # print("gradient_for_final_layer", gradient_for_final_layer.shape)
+        # print(gradient_for_final_layer, "\n\n")
 
         gradient_for_decoder = self.final_layer.backward(gradient_for_final_layer, learning_rate)  # shape: (batch_size, max_sequence_length, d_model)
-        print("gradient_for_decoder: ", gradient_for_decoder.shape)
-        print(gradient_for_decoder, "\n\n")
+        # print("gradient_for_decoder: ", gradient_for_decoder.shape)
+        # print(gradient_for_decoder, "\n\n")
 
         gradient_for_encoder= self.decoder.backward(gradient_for_decoder, learning_rate)  # shape: (batch_size, max_sequence_length, d_model)
-        print("gradient_for_encoder: ", gradient_for_encoder.shape)
-        print(gradient_for_encoder, "\n\n")
+        # print("gradient_for_encoder: ", gradient_for_encoder.shape)
+        # print(gradient_for_encoder, "\n\n")
 
         self.encoder.backward(gradient_for_encoder, learning_rate)
 
         return loss
 
-    def fit(self, input_data, target_data):
-        loss = self.backward(input_data, target_data, .1)
+    def fit(self, input_data, target_data, epochs, batch_size, learning_rate=0.001, print_predictions=True):
+        num_samples = len(input_data)
 
+        for epoch in range(1, epochs + 1):
+            total_loss = 0
+
+            for i in range(0, num_samples, batch_size):
+                input_batch = input_data[i:i + batch_size]
+                target_batch = target_data[i:i + batch_size]
+
+                loss = self.backward(input_batch, target_batch, learning_rate)
+                total_loss += loss * input_batch.shape[0]
+
+            if epoch == 1 or epoch % 10 == 0 or epoch == epochs:
+                print(f"Epoch {epoch:02d}/{epochs}, Loss: {total_loss / num_samples:.4f}")
+        print("\n")
+
+        predictions = []
+
+        for i in range(num_samples):
+            logits = self.forward((input_data[i].reshape(1, -1), target_data[i].reshape(1, -1))).squeeze(axis=0)
+            prediction = softmax(logits)
+            if print_predictions:
+                for p in prediction:
+                    print(p, " --------   ", np.max(p))
+                print("\n")
+            predictions.append(prediction)
+        return predictions
 
 
 if __name__ == '__main__':
@@ -825,10 +864,15 @@ if __name__ == '__main__':
     input_vocab_size = 10
     target_vocab_size = 15
     num_sequences = 5
-    max_sequence_length = 6
-    epochs = 10
+    max_sequence_length = 10
+    epochs = 3
     batch_size = 32
-    d_model = 8
+
+    # Model specifications
+    d_model = 128
+    n_layers = 3
+    n_heads = 4
+    d_ff = d_model * 4
 
     input_data = np.random.randint(0, input_vocab_size, (num_sequences, max_sequence_length))
     target_data = np.random.randint(0, target_vocab_size, (num_sequences, max_sequence_length))
@@ -837,5 +881,23 @@ if __name__ == '__main__':
         print(input_data[i], "  ", target_data[i])
     print("\n\n")
 
-    transformer = Transformer(d_model=d_model, n_heads=4, d_ff=16, n_layers=3, input_vocab_size=input_vocab_size, target_vocab_size=target_vocab_size)
-    transformer.fit(input_data, target_data)
+    transformer = Transformer(d_model=d_model, n_layers=n_layers, n_heads=n_heads, d_ff=d_ff, input_vocab_size=input_vocab_size, target_vocab_size=target_vocab_size)
+
+    start_time = time.time()
+    predictions = transformer.fit(input_data, target_data, epochs, batch_size, learning_rate=0.01, print_predictions=True)
+    end_time = time.time()
+
+    correct_generated_tokens = 0
+
+    for i in range(num_sequences):
+        tokens = []
+        for j in range(max_sequence_length):
+            token = np.argmax(predictions[i][j])
+            tokens.append(token)
+            if target_data[i, j] == token:
+                correct_generated_tokens += 1
+
+        print(target_data[i], "  ", np.array(tokens))
+
+    print(f"\nCorrect generated tokens: {correct_generated_tokens}  Accuracy: {(correct_generated_tokens / (num_sequences * max_sequence_length) * 100):.2f}%\n")
+    print(f"Total time = {end_time - start_time} seconds")
