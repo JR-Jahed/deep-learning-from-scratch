@@ -1,7 +1,7 @@
 import time
 import numpy as np
 
-np.set_printoptions(linewidth=1000, suppress=True)
+np.set_printoptions(linewidth=10000, suppress=True)
 
 
 def softmax(x, axis=-1):
@@ -822,10 +822,14 @@ class Transformer:
         # print(gradient_for_decoder, "\n\n")
 
         gradient_for_encoder= self.decoder.backward(gradient_for_decoder, learning_rate)  # shape: (batch_size, max_sequence_length, d_model)
-        # print("gradient_for_encoder: ", gradient_for_encoder.shape)
-        # print(gradient_for_encoder, "\n\n")
+        print("gradient_for_encoder: ", gradient_for_encoder.shape)
+        print(gradient_for_encoder, "\n\n")
 
-        self.encoder.backward(gradient_for_encoder, learning_rate)
+        """
+        Encoder backward seems to be causing gradient explosion. Gradients appear to be in a reasonable range
+        after commenting the following line for different numbers of epoch and learning rate.
+        """
+        # self.encoder.backward(gradient_for_encoder, learning_rate)
 
         return loss
 
@@ -865,13 +869,13 @@ if __name__ == '__main__':
     target_vocab_size = 15
     num_sequences = 5
     max_sequence_length = 10
-    epochs = 3
+    epochs = 2
     batch_size = 32
 
     # Model specifications
     d_model = 128
-    n_layers = 3
-    n_heads = 4
+    n_layers = 6
+    n_heads = 8
     d_ff = d_model * 4
 
     input_data = np.random.randint(0, input_vocab_size, (num_sequences, max_sequence_length))

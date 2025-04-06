@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 
 np.set_printoptions(linewidth=1000, suppress=True)
@@ -177,7 +178,7 @@ if __name__ == '__main__':
     target_vocab_size = 15
     num_sequences = 5
     max_sequence_length = 10
-    epochs = 100
+    epochs = 50
     batch_size = 32
 
     d_model = 128
@@ -185,28 +186,26 @@ if __name__ == '__main__':
     n_heads = 8
     d_ff = 512
 
-    input_data = np.random.randint(0, input_vocab_size, (num_sequences, max_sequence_length))
-    target_data = np.random.randint(0, target_vocab_size, (num_sequences, max_sequence_length))
+    input_data = torch.randint(0, input_vocab_size, (num_sequences, max_sequence_length))
+    target_data = torch.randint(0, target_vocab_size, (num_sequences, max_sequence_length))
+
+    dataset = TensorDataset(input_data, target_data)
+
+    loader = DataLoader(dataset, batch_size=batch_size)
 
     for i in range(num_sequences):
         print(input_data[i], "  ", target_data[i])
     print("\n\n")
 
-    input_data_tensor = torch.tensor(input_data, dtype=torch.long)
-    target_data_tensor = torch.tensor(target_data, dtype=torch.long)
-
     transformer = Transformer(d_model=d_model, n_layers=n_layers, n_heads=n_heads, d_ff=d_ff, input_vocab_size=input_vocab_size, target_vocab_size=target_vocab_size)
 
     loss_function = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(transformer.parameters(), lr=0.001)
+    optimizer = torch.optim.SGD(transformer.parameters(), lr=0.01)
 
     for epoch in range(1, epochs + 1):
         total_loss = 0
 
-        for i in range(0, num_sequences, batch_size):
-            input_batch = input_data_tensor[i:i + batch_size]
-            target_batch = target_data_tensor[i:i + batch_size]
-
+        for input_batch, target_batch in loader:
             optimizer.zero_grad()
             logits = transformer((input_batch, target_batch))
 
@@ -222,7 +221,7 @@ if __name__ == '__main__':
             print(f"Epoch {epoch:02d}/{epochs}, Loss: {total_loss / num_sequences:.4f}")
     print("\n")
 
-    logits = transformer((input_data_tensor, target_data_tensor))
+    logits = transformer((input_data, target_data))
     probabilities = nn.functional.softmax(logits, dim=-1).detach().numpy()
 
     for probabilities_ in probabilities:
