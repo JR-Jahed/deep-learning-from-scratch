@@ -528,9 +528,9 @@ class GlobalSelfAttention(BaseAttention):
         gradient_x: (batch_size, max_sequence_length, d_model)
         """
 
-        print("gradient max: ", np.max(gradient_output), end="  -----  ")
+        print("global grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        print("gradient max layer-norm: ", np.max(gradient), end="  ----  ")
+        print("max layer-norm: ", np.max(gradient), end="  ----  ")
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
@@ -567,10 +567,13 @@ class CausalSelfAttention(BaseAttention):
         gradient_x: (batch_size, max_sequence_length, d_model)
         """
 
+        print("causal grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
+        print("max layer-norm: ", np.max(gradient), end="  ----  ")
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
+        print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
         # Sum the three gradients
         return gradient_query + gradient_key + gradient_value
@@ -604,11 +607,14 @@ class CrossAttention(BaseAttention):
         gradient_x: (batch_size, max_sequence_length, d_model)
         gradient_context: (batch_size, max_sequence_length, d_model)
         """
-        
+
+        print("cross grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
+        print("max layer-norm: ", np.max(gradient), end="  ----  ")
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
+        print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
         # Summing the gradients of key and value yields gradient of context
         return gradient_query, gradient_key + gradient_value
@@ -638,7 +644,12 @@ class EncoderLayer:
         @Returns
         gradient: (batch_size, max_sequence_length, d_model)
         """
+
+        # Gradient of the output of self attention layer
         gradient = self.feed_forward.backward(gradient_output, learning_rate)
+
+        # Gradient of the input of self attention layer which was the output of
+        # previous layer during forward pass
         gradient = self.self_attention.backward(gradient, learning_rate)
         return gradient
 
@@ -673,7 +684,9 @@ class Encoder:
         gradient: (batch_size, max_sequence_length, d_model)
         """
         print("gradient max from decoder: ", np.max(gradient_output))
-        
+
+        gradient = gradient_output
+
         for layer in reversed(self.encoder_layers):
             gradient = layer.backward(gradient, learning_rate)
         
@@ -695,7 +708,7 @@ class DecoderLayer:
     def forward(self, x, context):
         """
         @Params
-        x: (batch_size, max_sequence_length, d_model)    comes from positional embedding of decoder
+        x: (batch_size, max_sequence_length, d_model)    comes from positional embedding of decoder for the first decoder layer, otherwise previous decoder layer
         context: (batch_size, max_sequence_length, d_model)    comes from encoder
         @Returns
         x: (batch_size, max_sequence_length, d_model)
@@ -714,19 +727,24 @@ class DecoderLayer:
         gradient_x_causal_self_attention: (batch_size, max_sequence_length, d_model)
         gradient_context: (batch_size, max_sequence_length, d_model)
         """
-        gradient = self.feed_forward.backward(gradient_output, learning_rate)
+
+        # gradient_output is the gradient of the output of feed-forward layer of every decoder layer
+        # gradient_cross_attention_output stores the gradient of the output of cross attention layer
+        # which was the input of feed-forward during forward pass
+
+        gradient_cross_attention_output = self.feed_forward.backward(gradient_output, learning_rate)
 
         # During forward pass, there were two inputs, x and context, which came from positional embedding
         # of decoder, and encoder respectively. Therefore, during backpropagation we calculate their gradients
         # and pass gradient of context to decoder layer which passes it to encoder because it came from
         # encoder, and gradient of x to positional embedding of decoder because it came from that layer.
 
-        gradient_x_cross_attention, gradient_context = self.cross_attention.backward(gradient, learning_rate)
+        gradient_causal_self_attention_output, gradient_context = self.cross_attention.backward(gradient_cross_attention_output, learning_rate)
 
         # Gradient of input that goes into causal self-attention
-        gradient_x_causal_self_attention = self.causal_self_attention.backward(gradient_x_cross_attention, learning_rate)
+        gradient_causal_self_attention_input = self.causal_self_attention.backward(gradient_causal_self_attention_output, learning_rate)
 
-        return gradient_x_causal_self_attention, gradient_context
+        return gradient_causal_self_attention_input, gradient_context
 
 
 class Decoder:
@@ -762,14 +780,20 @@ class Decoder:
         gradient_context: (batch_size, max_sequence_length, d_model)
         """
 
+        # During forward pass, for every decoder layer, x comes from previous decoder layer while
+        # context is injected from outside, in this case, encoder. Therefore, gradient_x should be
+        # passed to the previous layer during backpropagation.
+
+        gradient_x = gradient_output
+
         # We need to pass this to encoder. It's the summation of the gradients of context of all the cross attention layers
         gradient_context = 0
         
         for layer in reversed(self.decoder_layers):
-            gradient_x, gradient_context_ = layer.backward(gradient_output, learning_rate)
+            gradient_x, gradient_context_ = layer.backward(gradient_x, learning_rate)
             gradient_context += gradient_context_
 
-        self.positional_embedding.backward(gradient_output, learning_rate)
+        self.positional_embedding.backward(gradient_x, learning_rate)
 
         return gradient_context
 
