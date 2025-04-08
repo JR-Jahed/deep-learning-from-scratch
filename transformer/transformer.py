@@ -154,6 +154,13 @@ class PositionalEmbedding:
 class ScaledDotProductAttention:
     def __init__(self, d_model, d):
 
+        self.query = None
+        self.key = None
+        self.value = None
+        self.Q = None
+        self.K = None
+        self.V = None
+        self.A = None
         self.d_model = d_model
         self.d = d
 
@@ -209,19 +216,25 @@ class ScaledDotProductAttention:
         gradient_query, gradient_key, gradient_value: (batch_size, max_sequence_length, d_model)
         """
 
+        print("scaled max: ", np.max(gradient_output), end="  ---  ")
+
         scale = 1 / np.sqrt(self.d)
 
         # --- Backprop through final multiplication: output = A . V ---
         # d_output/dV: gradient flows via V
         gradient_V = np.matmul(self.A.transpose(0, 2, 1), gradient_output)  # shape: (batch_size, max_sequence_length, d)
+        print("V: ", np.max(gradient_V), end="  ---  ")
 
         # Gradient with respect to A:
         gradient_A = np.matmul(gradient_output, self.V.transpose(0, 2, 1))  # shape: (batch_size, max_sequence_length, max_sequence_length)
+        print("A: ", np.max(gradient_A), end="  ---  ")
 
         # --- Backprop through softmax ---
-        # For softmax, derivative is: dZ = A * (dA - sum(dA * A, axis=-1, keepdims=True))
+        # For softmax, derivative is: dZ (dQK) = A * (dA - sum(dA * A, axis=-1, keepdims=True))
         sum_gradient_A_A = np.sum(gradient_A * self.A, axis=-1, keepdims=True)  # shape: (batch_size, max_sequence_length, 1)
+        print("A_A: ", np.max(sum_gradient_A_A), end="  ---  ")
         gradient_QK = self.A * (gradient_A - sum_gradient_A_A)  # shape: (batch_size, max_sequence_length, max_sequence_length)
+        print("QK: ", np.max(gradient_QK), end="  ---  ")
 
         # --- Backprop through scaling ---
         gradient_QK *= scale
@@ -229,20 +242,28 @@ class ScaledDotProductAttention:
         # --- Backprop through the dot product QK = Q . K^T ---
         # Gradient with respect to Q and K:
         gradient_Q = np.matmul(gradient_QK, self.K)  # shape: (batch_size, max_sequence_length, d)
+        print("Q: ", np.max(gradient_Q), end="  ---  ")
         gradient_K = np.matmul(gradient_QK.transpose(0, 2, 1), self.Q)  # shape: (batch_size, max_sequence_length, d)
+        print("K: ", np.max(gradient_K), end="  ---  ")
 
         # --- Backprop through linear projections ---
         # For Q = query . WQ, gradients:
         gradient_WQ = np.sum(np.matmul(self.query.transpose(0, 2, 1), gradient_Q), axis=0)  # shape: (d_model, d)
+        print("WQ: ", np.max(gradient_WQ), end="  ---  ")
         gradient_query = np.matmul(gradient_Q, self.WQ.T)  # shape: (batch_size, max_sequence_length, d_model)
+        print("query: ", np.max(gradient_query), end="  ---  ")
 
         # For K = key . WK:
         gradient_WK = np.sum(np.matmul(self.key.transpose(0, 2, 1), gradient_K), axis=0)  # shape: (d_model, d)
+        print("WK: ", np.max(gradient_WK), end="  ---  ")
         gradient_key = np.matmul(gradient_K, self.WK.T)  # shape: (batch_size, max_sequence_length, d_model)
+        print("key: ", np.max(gradient_key), end="  ---  ")
 
         # For V = value . WV:
         gradient_WV = np.sum(np.matmul(self.value.transpose(0, 2, 1), gradient_V), axis=0)  # shape: (d_model, d)
+        print("WV: ", np.max(gradient_WV), end="  ---  ")
         gradient_value = np.matmul(gradient_V, self.WV.T)  # shape: (batch_size, max_sequence_length, d_model)
+        print("value: ", np.max(gradient_value))
 
         self.WQ -= learning_rate * gradient_WQ
         self.WK -= learning_rate * gradient_WK
@@ -296,10 +317,16 @@ class MultiHeadAttention:
         gradient_query, gradient_key, gradient_value: (batch_size, max_sequence_length, d_model)
         """
 
+        # print("mha grad max: ", np.max(gradient_output), end="  ---  ")
+
         gradient_weights = np.dot(self.concatenated_output.reshape(-1, self.d_model).T, gradient_output.reshape(-1, self.d_model))
+
+        # print("weights: ", np.max(gradient_weights), end="  ---  ")
 
         # Gradient with respect to the concatenated output
         gradient_concatenated_output = np.dot(gradient_output, self.W.T)
+
+        # print("concat: ", np.max(gradient_concatenated_output), end="  ---  ")
 
         # Split gradient into each head's gradient
         gradient_heads = np.split(gradient_concatenated_output, self.n_heads, axis=-1)  # shape (batch_size, max_sequence_length, head_dim)
@@ -307,14 +334,22 @@ class MultiHeadAttention:
         gradient_query = 0
         gradient_key = 0
         gradient_value = 0
+        print()
+        # import os
+        # import sys
+        # original_stdout = sys.stdout
+        # sys.stdout = open(os.devnull, 'w')
 
         for i, head in enumerate(self.attention_heads):
             gradient_q, gradient_k, gradient_v = head.backward(gradient_heads[i], learning_rate)
             gradient_query += gradient_q
             gradient_key += gradient_k
             gradient_value += gradient_v
+        # sys.stdout = original_stdout
 
         self.W -= learning_rate * gradient_weights
+
+        # print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
         return gradient_query, gradient_key, gradient_value
 
@@ -378,9 +413,6 @@ class LayerNormalisation:
         gradient_g = np.sum(gradient_output * self.normalised, axis=(0, 1))  # shape: (d_model,)
         gradient_b = np.sum(gradient_output, axis=(0, 1))  # shape: (d_model,)
 
-        self.g -= learning_rate * gradient_g
-        self.b -= learning_rate * gradient_b
-
         gradient_normalised = gradient_output * self.g  # shape: (batch_size, max_sequence_length, d_model)
 
         # Following the formula for the gradient of layer norm:
@@ -389,6 +421,9 @@ class LayerNormalisation:
         mean_gradient_normalised_normalised = np.mean(gradient_normalised * self.normalised, axis=-1, keepdims=True)  # shape (batch_size, max_sequence_length, 1)
 
         gradient_input = (1.0 / self.standard_deviation) * (gradient_normalised - mean_gradient_normalised - self.normalised * mean_gradient_normalised_normalised)
+
+        self.g -= learning_rate * gradient_g
+        self.b -= learning_rate * gradient_b
 
         return gradient_input
 
@@ -528,13 +563,14 @@ class GlobalSelfAttention(BaseAttention):
         gradient_x: (batch_size, max_sequence_length, d_model)
         """
 
-        print("global grad max: ", np.max(gradient_output), end="  -----  ")
+        print("global", end="  ---  ")
+        # print("global grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+        # print("max layer-norm: ", np.max(gradient), end="  ----  ")
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
-        print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
+        # print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
         # Sum the three gradients
         return gradient_query + gradient_key + gradient_value
@@ -567,13 +603,14 @@ class CausalSelfAttention(BaseAttention):
         gradient_x: (batch_size, max_sequence_length, d_model)
         """
 
-        print("causal grad max: ", np.max(gradient_output), end="  -----  ")
+        print("causal", end="  ---  ")
+        # print("causal grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+        # print("max layer-norm: ", np.max(gradient), end="  ----  ")
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
-        print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
+        # print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
         # Sum the three gradients
         return gradient_query + gradient_key + gradient_value
@@ -608,13 +645,14 @@ class CrossAttention(BaseAttention):
         gradient_context: (batch_size, max_sequence_length, d_model)
         """
 
-        print("cross grad max: ", np.max(gradient_output), end="  -----  ")
+        print("cross", end="  ----   ")
+        # print("cross grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+        # print("max layer-norm: ", np.max(gradient), end="  ----  ")
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
-        print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
+        # print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
         # Summing the gradients of key and value yields gradient of context
         return gradient_query, gradient_key + gradient_value
@@ -895,12 +933,12 @@ if __name__ == '__main__':
     target_vocab_size = 15
     num_sequences = 5
     max_sequence_length = 10
-    epochs = 25
+    epochs = 50
     batch_size = 32
 
     # Model specifications
     d_model = 128
-    n_layers = 6
+    n_layers = 1
     n_heads = 8
     d_ff = d_model * 4
 

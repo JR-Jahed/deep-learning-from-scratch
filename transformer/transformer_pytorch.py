@@ -182,7 +182,7 @@ if __name__ == '__main__':
     batch_size = 32
 
     d_model = 128
-    n_layers = 6
+    n_layers = 1
     n_heads = 8
     d_ff = 512
 
@@ -193,9 +193,9 @@ if __name__ == '__main__':
 
     loader = DataLoader(dataset, batch_size=batch_size)
 
-    for i in range(num_sequences):
-        print(input_data[i], "  ", target_data[i])
-    print("\n\n")
+    # for i in range(num_sequences):
+    #     print(input_data[i], "  ", target_data[i])
+    # print("\n\n")
 
     transformer = Transformer(d_model=d_model, n_layers=n_layers, n_heads=n_heads, d_ff=d_ff, input_vocab_size=input_vocab_size, target_vocab_size=target_vocab_size)
 
@@ -224,11 +224,11 @@ if __name__ == '__main__':
     logits = transformer((input_data, target_data))
     probabilities = nn.functional.softmax(logits, dim=-1).detach().numpy()
 
-    for probabilities_ in probabilities:
-        for p in probabilities_:
-            print(p, "  --------   ", np.max(p))
-        print("\n")
-    print("\n\n")
+    # for probabilities_ in probabilities:
+    #     for p in probabilities_:
+    #         print(p, "  --------   ", np.max(p))
+    #     print("\n")
+    # print("\n\n")
 
     correct_generated_tokens = 0
 
