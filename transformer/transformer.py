@@ -49,7 +49,7 @@ def cross_entropy_gradient(probabilities, target):
     gradient = probabilities.copy()
     gradient[np.arange(batch_size)[:, None], np.arange(seq_length), target] -= 1
 
-    return gradient
+    return gradient / batch_size
 
 
 class Embedding:
@@ -912,7 +912,7 @@ class Transformer:
 
         #     if epoch == 1 or epoch % 10 == 0 or epoch == epochs:
         #         print(f"Epoch {epoch:02d}/{epochs}, Loss: {total_loss / num_samples:.4f}")
-        # print("\n")
+        print("\n")
 
         predictions = []
 
