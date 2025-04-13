@@ -562,11 +562,15 @@ class GlobalSelfAttention(BaseAttention):
         @Returns
         gradient_x: (batch_size, max_sequence_length, d_model)
         """
-
-        print("global", end="  ---  ")
-        # print("global grad max: ", np.max(gradient_output), end="  -----  ")
+        print("\nglobal", end="  ---  ")
+        print("global grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        # print("max layer-norm: ", np.max(gradient), end="  ----  ")
+        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+
+        """
+        I'm not taking care of the gradients of the residual connections of attention layers
+        and this might be causing vanishing gradients when there are more than one layer
+        """
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
@@ -603,10 +607,15 @@ class CausalSelfAttention(BaseAttention):
         gradient_x: (batch_size, max_sequence_length, d_model)
         """
 
-        print("causal", end="  ---  ")
-        # print("causal grad max: ", np.max(gradient_output), end="  -----  ")
+        print("\ncausal", end="  ---  ")
+        print("causal grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        # print("max layer-norm: ", np.max(gradient), end="  ----  ")
+        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+
+        """
+        I'm not taking care of the gradients of the residual connections of attention layers
+        and this might be causing vanishing gradients when there are more than one layer
+        """
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
@@ -645,10 +654,15 @@ class CrossAttention(BaseAttention):
         gradient_context: (batch_size, max_sequence_length, d_model)
         """
 
-        print("cross", end="  ----   ")
-        # print("cross grad max: ", np.max(gradient_output), end="  -----  ")
+        print("\ncross", end="  ----   ")
+        print("cross grad max: ", np.max(gradient_output), end="  -----  ")
         gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        # print("max layer-norm: ", np.max(gradient), end="  ----  ")
+        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+
+        """
+        I'm not taking care of the gradients of the residual connections of attention layers
+        and this might be causing vanishing gradients when there are more than one layer
+        """
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
         gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
@@ -931,14 +945,14 @@ if __name__ == '__main__':
 
     input_vocab_size = 10
     target_vocab_size = 15
-    num_sequences = 5
+    num_sequences = 10
     max_sequence_length = 10
-    epochs = 50
+    epochs = 2
     batch_size = 32
 
     # Model specifications
+    n_layers = 2
     d_model = 128
-    n_layers = 1
     n_heads = 8
     d_ff = d_model * 4
 

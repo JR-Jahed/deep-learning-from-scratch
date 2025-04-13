@@ -184,7 +184,7 @@ if __name__ == '__main__':
     d_model = 128
     n_layers = 1
     n_heads = 8
-    d_ff = 512
+    d_ff = d_model * 4
 
     input_data = torch.randint(0, input_vocab_size, (num_sequences, max_sequence_length))
     target_data = torch.randint(0, target_vocab_size, (num_sequences, max_sequence_length))
@@ -224,11 +224,11 @@ if __name__ == '__main__':
     logits = transformer((input_data, target_data))
     probabilities = nn.functional.softmax(logits, dim=-1).detach().numpy()
 
-    # for probabilities_ in probabilities:
-    #     for p in probabilities_:
-    #         print(p, "  --------   ", np.max(p))
-    #     print("\n")
-    # print("\n\n")
+    for probabilities_ in probabilities:
+        for p in probabilities_:
+            print(p, "  --------   ", np.max(p))
+        print("\n")
+    print("\n\n")
 
     correct_generated_tokens = 0
 
