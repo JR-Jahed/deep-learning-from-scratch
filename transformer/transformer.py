@@ -89,22 +89,21 @@ class Embedding:
 
 
 def positional_encoding(length, depth):
-
     """
     Will come back to it later to understand what's happening
     """
 
     depth = depth / 2
 
-    positions = np.arange(length)[:, np.newaxis]     # (seq, 1)
-    depths = np.arange(depth)[np.newaxis, :] / depth   # (1, depth)
+    positions = np.arange(length)[:, np.newaxis]  # (seq, 1)
+    depths = np.arange(depth)[np.newaxis, :] / depth  # (1, depth)
 
-    angle_rates = 1 / (10000 ** depths)         # (1, depth)
-    angle_rads = positions * angle_rates      # (pos, depth)
+    angle_rates = 1 / (10000 ** depths)  # (1, depth)
+    angle_rads = positions * angle_rates  # (pos, depth)
 
     pos_encoding = np.concatenate(
-      [np.sin(angle_rads), np.cos(angle_rads)],
-      axis=-1)
+        [np.sin(angle_rads), np.cos(angle_rads)],
+        axis=-1)
 
     return pos_encoding.astype(np.float32)
 
@@ -153,7 +152,6 @@ class PositionalEmbedding:
 
 class ScaledDotProductAttention:
     def __init__(self, d_model, d):
-
         self.query = None
         self.key = None
         self.value = None
@@ -564,20 +562,28 @@ class GlobalSelfAttention(BaseAttention):
         """
         print("\nglobal", end="  ---  ")
         print("global grad max: ", np.max(gradient_output), end="  -----  ")
-        gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+
+        # Gradient of the output of add layer
+        gradient_add = self.layer_normalisation.backward(gradient_output, learning_rate)
+        print("max layer-norm: ", np.max(gradient_add), end="  ----  ")
 
         """
-        I'm not taking care of the gradients of the residual connections of attention layers
-        and this might be causing vanishing gradients when there are more than one layer
+        My assumption was correct. Not handling the gradients of residual connections was
+        causing vanishing gradients. Even though some gradients are still becoming very small (1e-9),
+        they are much larger than what they had become (1e-30) before taking the gradients of residual
+        connections into account. Model consisting of more than one encoder-decoder layer is still
+        unable to learn properly because of the small gradients. Let's try to solve it now.
         """
+
+        # Gradient of input to this attention layer and gradient of output of MultiHeadAttention
+        gradient_x, gradient_attention_output = self.add.backward(gradient_add, learning_rate)
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
-        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
+        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient_attention_output, learning_rate)
         # print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
-        # Sum the three gradients
-        return gradient_query + gradient_key + gradient_value
+        # Sum all the gradients to get the gradient of input which is the output of previous layer
+        return gradient_x + gradient_query + gradient_key + gradient_value
 
 
 """
@@ -609,20 +615,28 @@ class CausalSelfAttention(BaseAttention):
 
         print("\ncausal", end="  ---  ")
         print("causal grad max: ", np.max(gradient_output), end="  -----  ")
-        gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+
+        # Gradient of the output of add layer
+        gradient_add = self.layer_normalisation.backward(gradient_output, learning_rate)
+        print("max layer-norm: ", np.max(gradient_add), end="  ----  ")
 
         """
-        I'm not taking care of the gradients of the residual connections of attention layers
-        and this might be causing vanishing gradients when there are more than one layer
+        My assumption was correct. Not handling the gradients of residual connections was
+        causing vanishing gradients. Even though some gradients are still becoming very small (1e-9),
+        they are much larger than what they had become (1e-30) before taking the gradients of residual
+        connections into account. Model consisting of more than one encoder-decoder layer is still
+        unable to learn properly because of the small gradients. Let's try to solve it now.
         """
+
+        # Gradient of input to this attention layer and gradient of output of MultiHeadAttention
+        gradient_x, gradient_attention_output = self.add.backward(gradient_add, learning_rate)
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
-        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
+        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient_attention_output, learning_rate)
         # print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
-        # Sum the three gradients
-        return gradient_query + gradient_key + gradient_value
+        # Sum all the gradients to get the gradient of input which is the output of previous layer
+        return gradient_x + gradient_query + gradient_key + gradient_value
 
 
 """
@@ -656,20 +670,33 @@ class CrossAttention(BaseAttention):
 
         print("\ncross", end="  ----   ")
         print("cross grad max: ", np.max(gradient_output), end="  -----  ")
-        gradient = self.layer_normalisation.backward(gradient_output, learning_rate)
-        print("max layer-norm: ", np.max(gradient), end="  ----  ")
+
+        # Gradient of the output of add layer
+        gradient_add = self.layer_normalisation.backward(gradient_output, learning_rate)
+        print("max layer-norm: ", np.max(gradient_add), end="  ----  ")
 
         """
-        I'm not taking care of the gradients of the residual connections of attention layers
-        and this might be causing vanishing gradients when there are more than one layer
+        My assumption was correct. Not handling the gradients of residual connections was
+        causing vanishing gradients. Even though some gradients are still becoming very small (1e-9),
+        they are much larger than what they had become (1e-30) before taking the gradients of residual
+        connections into account. Model consisting of more than one encoder-decoder layer is still
+        unable to learn properly because of the small gradients. Let's try to solve it now.
         """
+
+        # Gradient of input to this attention layer and gradient of output of MultiHeadAttention
+        gradient_x, gradient_attention_output = self.add.backward(gradient_add, learning_rate)
 
         # As MultiHeadAttention receives 3 inputs (query, key, value), it returns 3 gradients during backpropagation
-        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient, learning_rate)
+        gradient_query, gradient_key, gradient_value = self.mha.backward(gradient_attention_output, learning_rate)
         # print("query max: ", np.max(gradient_query), "    key max: ", np.max(gradient_key), "    value max: ", np.max(gradient_value))
 
+        # Summing the gradients of x and query yields gradient of input
+        # Gradient of x should only be added to the gradient of query because the residual connection is between
+        # the output of the causal attention layer and the output of MultiHeadAttention of cross attention layer.
+        # There's no residual connection that involves the output of encoder
+
         # Summing the gradients of key and value yields gradient of context
-        return gradient_query, gradient_key + gradient_value
+        return gradient_x + gradient_query, gradient_key + gradient_value
 
 
 class EncoderLayer:
@@ -951,7 +978,7 @@ if __name__ == '__main__':
     batch_size = 32
 
     # Model specifications
-    n_layers = 2
+    n_layers = 6
     d_model = 128
     n_heads = 8
     d_ff = d_model * 4
@@ -965,9 +992,15 @@ if __name__ == '__main__':
 
     transformer = Transformer(d_model=d_model, n_layers=n_layers, n_heads=n_heads, d_ff=d_ff, input_vocab_size=input_vocab_size, target_vocab_size=target_vocab_size)
 
+    # import os
+    # import sys
+    # original_stdout = sys.stdout
+    # sys.stdout = open(os.devnull, 'w')
+
     start_time = time.time()
     predictions = transformer.fit(input_data, target_data, epochs, batch_size, learning_rate=0.01, print_predictions=True)
     end_time = time.time()
+    # sys.stdout = original_stdout
 
     correct_generated_tokens = 0
 
