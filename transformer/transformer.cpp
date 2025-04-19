@@ -4,6 +4,23 @@ using namespace std;
 using namespace chrono;
 using namespace Eigen;
 
+/*
+
+_________________________________________________________________________________________________________
+
+This is the C++ implementation of Transformer.
+
+IDE: CLion (Downloaded using my Queen's email)
+
+
+This is entirely for learning. There is no emphasis on test accuracy or optimisation. Implementation
+of Transformer from scratch without resorting to any library such as PyTorch or Tensorflow is the aim here.
+
+_________________________________________________________________________________________________________
+
+*/
+
+
 mt19937 rng(steady_clock::now().time_since_epoch().count());
 normal_distribution normal_dist(0.0, .01);
 

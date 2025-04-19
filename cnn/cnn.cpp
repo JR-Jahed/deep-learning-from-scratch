@@ -11,7 +11,7 @@ This is the C++ implementation of CNN. It's significantly faster than Python.
 IDE: CLion (Downloaded using my Queen's email)
 
 
-This is entirely for learning. There is no emphasis on accuracy or optimisation. Implementation
+This is entirely for learning. There is no emphasis on test accuracy or optimisation. Implementation
 of CNN from scratch without resorting to any library such as PyTorch or Tensorflow is the aim here.
 
 _________________________________________________________________________________________________________
@@ -24,6 +24,17 @@ normal_distribution normal_dist(0.0, .01);
 
 // Cross-Entropy Loss function
 double cross_entropy_loss(const vector<vector<double>>& predictions, const vector<int>& labels) {
+    /*
+    Compute the cross-entropy loss for integer labels.
+
+    @Params
+    predictions: Softmax probabilities, shape (batch_size, num_classes)
+    labels: Integer labels, shape (batch_size,)
+
+    @Returns
+    loss: Scalar loss value
+    */
+
     const int batch_size = static_cast<int>(predictions.size());
 
     double loss = 0;
@@ -117,6 +128,14 @@ public:
 
     vector<vector<vector<vector<double>>>> forward(vector<vector<vector<vector<double>>>>& input) override {
 
+        /*
+        @Params
+        input: (batch_size, input_height, input_width, input_channels)
+
+        @Return
+        output: (batch_size, input_height, input_width, output_channels)
+        */
+
         // Save input for backpropagation
         this->input = input;
 
@@ -134,10 +153,9 @@ public:
         auto output = vector(batch_size, vector(output_height, vector(output_width, vector<double>(output_channels))));
 
         for(int i = 0; i < batch_size; i++) {
-            for(int h = 0; h < output_height; h++) {
-                for(int w = 0; w < output_width; w++) {
-                    for(int oc = 0; oc < output_channels; oc++) {
-
+            for(int h = 0; h < output_height; h++) {  // Loop over the height of the output
+                for(int w = 0; w < output_width; w++) {  // Loop over the width of the output
+                    for(int oc = 0; oc < output_channels; oc++) {  // Loop over the output channels
 
                         /*
 
@@ -149,14 +167,17 @@ public:
                         */
 
 
+                        // Initialize the sum for this particular output location
                         double sum_value = 0.0;
 
-                        for(int ic = 0; ic < input_channels; ic++) {
-                            for(int kh = 0; kh < kernel_height; kh++) {
-                                for(int kw = 0; kw < kernel_width; kw++) {
+                        for(int ic = 0; ic < input_channels; ic++) {  // Loop over each input channel
+                            // Extract the region of the input image that corresponds to the filter
+                            for(int kh = 0; kh < kernel_height; kh++) {  // Loop over the kernel height
+                                for(int kw = 0; kw < kernel_width; kw++) {  // Loop over the kernel width
                                     const double input_value  = input[i][h + kh][w + kw][ic];
                                     const double kernel_value = weights[oc][ic][kh][kw];
 
+                                    // Multiply the input value with the kernel value and add to the sum
                                     sum_value += input_value * kernel_value;
                                 }
                             }
@@ -183,10 +204,19 @@ public:
             }
         }
 
-        return output;
+        return output;  // shape: (batch_size, input_height, input_width, output_channels)
     }
 
     vector<vector<vector<vector<double>>>> backward(vector<vector<vector<vector<double>>>>& dL_dout, const double learning_rate) override {
+
+        /*
+        @Params
+        dL_dout: (batch_size, output_height, output_width, output_channels)
+        learning_rate: A float
+
+        @Return
+        dL_din: (batch_size, input_height, input_width, input_channels)
+        */
 
         const int batch_size = input.size();
         const int input_height = input[0].size();
@@ -227,10 +257,11 @@ public:
 
         */
 
+        // Calculate gradients for weights, biases, and input
         for(int i = 0; i < batch_size; i++) {
-            for(int h = 0; h < dL_dout[0].size(); h++) {
-                for(int w  = 0; w < dL_dout[0][0].size(); w++) {
-                    for(int oc = 0; oc < output_channels; oc++) {
+            for(int h = 0; h < dL_dout[0].size(); h++) {  // Output height
+                for(int w  = 0; w < dL_dout[0][0].size(); w++) {  // Output width
+                    for(int oc = 0; oc < output_channels; oc++) {  // Output channels
 
                         /*
 
@@ -257,7 +288,6 @@ public:
                                     gradients of all the weights that were used to calculate this particular output position
 
                                     */
-
                                     dL_dweights[oc][ic][kh][kw] += input_value * dL_dout[i][h][w][oc];
 
 
@@ -271,7 +301,6 @@ public:
                                     the input values that were used to calculate this output value
 
                                     */
-
                                     dL_din[i][h + kh][w + kw][ic] += weights[oc][ic][kh][kw] * dL_dout[i][h][w][oc];
                                 }
                             }
@@ -281,6 +310,7 @@ public:
             }
         }
 
+        // Update the weights and biases
         for(int oc = 0; oc < output_channels; oc++) {
             for(int ic = 0; ic < input_channels; ic++) {
                 for(int kh = 0; kh < kernel_height; kh++) {
@@ -351,10 +381,20 @@ public:
     }
 
     vector<vector<double>> forward(const auto& input) {
+        /*
+        @Params
+        input: (batch_size, input_channels)
+
+        @Return
+        output: (batch_size, output_channels).
+        */
+
+        // Save input for backpropagation
         this->input = input;
 
         auto output = vector<vector<double>>();
 
+        // Iterate over the batch
         for(auto& row: input) {
             vector row_output(output_channels, 0.0);
 
@@ -373,6 +413,15 @@ public:
 
     vector<vector<double>> backward(const vector<vector<double>>& dL_dout, const double learning_rate) {
 
+        /*
+        @Params
+        dL_dout: (batch_size, output_channels)
+        learning_rate: float
+
+        @Return
+        dL_din: (batch_size, input_channels)
+        */
+
         const int batch_size = input.size();
         vector<vector<double>> dL_din(input.size(), vector<double>(input[0].size(), 0.0));  // Gradient w.r.t. input
         vector<vector<double>> dL_dweights = vector(input_channels, vector<double>(output_channels, 0));  // Gradient w.r.t. weights
@@ -382,7 +431,10 @@ public:
             for(int oc = 0; oc < output_channels; oc++) {
                 dL_dbiases[oc] = dL_dout[i][oc];
                 for(int ic = 0; ic < input[0].size(); ic++) {
+                    // Calculate gradients of weights
                     dL_dweights[ic][oc] += dL_dout[i][oc] * input[i][ic];
+
+                    // Calculate gradients of inputs (outputs of the previous layer) to this layer
                     dL_din[i][ic] += weights[ic][oc] * dL_dout[i][oc];
                 }
             }
@@ -395,6 +447,7 @@ public:
             }
         }
 
+        // Update the weights and biases
         for(int oc = 0; oc < output_channels; oc++) {
             biases[oc] -= learning_rate * dL_dbiases[oc];
             for(int ic = 0; ic < input.size(); ic++) {
@@ -461,6 +514,16 @@ public:
     vector<vector<vector<vector<double>>>> input;
 
     vector<vector<vector<vector<double>>>> forward(vector<vector<vector<vector<double>>>>& input) override {
+
+        /*
+        @Params
+        input: (batch_size, height, width, channels)
+
+        @Returns
+        output: (batch_size, height / 2, width / 2, channels)
+        */
+
+        // Save input for backpropagation
         this->input = input;
 
         const int batch_size = input.size();
@@ -468,6 +531,7 @@ public:
         const int width = input[0][0].size();
         const int channels = input[0][0][0].size();
 
+        // Calculate the output dimensions
         const int output_height = height / 2;
         const int output_width = width / 2;
 
@@ -477,8 +541,10 @@ public:
             for(int j = 0; j < output_height; j++) {
                 for(int k = 0; k < output_width; k++) {
                     for(int l = 0; l < channels; l++) {
+
+                        // Get the maximum value in the 2x2 region
                         output[i][j][k][l] = max({input[i][j * 2][k * 2][l], input[i][j * 2][k * 2 + 1][l],
-                                             input[i][j * 2 + 1][k * 2][l], input[i][j * 2 + 1][k * 2 + 1][l]});
+                                              input[i][j * 2 + 1][k * 2][l], input[i][j * 2 + 1][k * 2 + 1][l]});
                     }
                 }
             }
@@ -487,6 +553,14 @@ public:
     }
 
     vector<vector<vector<vector<double>>>> backward(vector<vector<vector<vector<double>>>>& dL_dout, double learning_rate) override {
+        /*
+        @Params
+        dL_dout: (batch_size, output_height, output_width, channels)
+
+        @Returns
+        dL_din: (batch_size, input_height, input_width, channels)
+        */
+
         const int batch_size = input.size();
         const int input_height = input[0].size();
         const int input_width = input[0][0].size();
@@ -518,6 +592,8 @@ public:
                                 }
                             }
                         }
+
+                        // The gradient is only propagated to the maximum element
                         dL_din[i][h * 2 + max_row][w * 2 + max_col][oc] += dL_dout[i][h][w][oc];
                     }
                 }
@@ -529,10 +605,10 @@ public:
 
 class Sequential {
 public:
-    vector<shared_ptr<ConvPool>> conv_pool_layers;
-    vector<Dense> dense_layers;
-    vector<vector<vector<vector<vector<double>>>>> conv_pool_outputs;
-    vector<vector<vector<double>>> dense_outputs;
+    vector<shared_ptr<ConvPool>> conv_pool_layers;  // List to store convolutional and pooling layers
+    vector<Dense> dense_layers;  // List to store dense layers
+    vector<vector<vector<vector<vector<double>>>>> conv_pool_outputs;  // List to store outputs from convolutional layers
+    vector<vector<vector<double>>> dense_outputs;  // List to store outputs from dense layers
     tuple<int, int, int, int> last_conv_output_shape;
 
     Sequential() {}
@@ -546,7 +622,7 @@ public:
     }
 
     vector<vector<double>> fit(const int epochs, const vector<vector<vector<vector<double>>>>& input_images,
-                                const vector<int>& labels, const int batch_size, const double learning_rate) {
+                                 const vector<int>& labels, const int batch_size, const double learning_rate) {
 
         for(int epoch = 1; epoch <= epochs; epoch++) {
 
@@ -578,7 +654,7 @@ public:
             for(auto& val: prediction) {
                 cout << val << " ";
             }
-            cout << "\n";
+            cout << "  ------    " << *max_element(prediction.begin(), prediction.end()) << "\n";
         }
         cout << "\n";
 
@@ -594,14 +670,17 @@ public:
         // Forward pass through convolutional layers
         for(auto& conv_pool_layer : conv_pool_layers) {
             current_input = conv_pool_layer->forward(current_input);
-            conv_pool_outputs.emplace_back(current_input); // Cache the output of each conv layer
+
+            // Cache the output of each convolutional layer
+            conv_pool_outputs.emplace_back(current_input);
         }
 
         last_conv_output_shape = {current_input.size(), current_input[0].size(), current_input[0][0].size(), current_input[0][0][0].size()};
 
-        // Flatten the features maps
         vector<vector<double>> flat_input;
 
+        // Flatten the output from the last convolutional layer
+        // There should be one row for each image in the batch
         for(auto& feature_maps: current_input) {
             flat_input.emplace_back(flatten(feature_maps));
         }
@@ -611,7 +690,9 @@ public:
 
         for(auto& dense_layer : dense_layers) {
             current_dense_input = dense_layer.forward(current_dense_input);
-            dense_outputs.emplace_back(current_dense_input); // Cache the output of each dense layer
+
+            // Cache the output of each dense layer
+            dense_outputs.emplace_back(current_dense_input);
         }
 
         return current_dense_input;
@@ -647,6 +728,8 @@ private:
 
     vector<vector<vector<vector<double>>>> unflatten(const vector<vector<double>>& flat) {
 
+        // Get the output of the last convolutional layer
+
         int dim1 = get<0>(last_conv_output_shape);
         int dim2 = get<1>(last_conv_output_shape);
         int dim3 = get<2>(last_conv_output_shape);
@@ -673,8 +756,8 @@ private:
 
 int main() {
 
-    int width = 64;
-    int height = 64;
+    int width = 32;
+    int height = 32;
     int channels = 3;
 
     int totalImages = 10;
@@ -685,14 +768,18 @@ int main() {
     vector<vector<vector<vector<double>>>> images = vector(totalImages, vector(height, vector(width, vector<double>(channels))));
     vector<int> labels(totalImages);
 
+    // Create images with random pixel values between 0 and 255
     for(int i = 0; i < totalImages; i++) {
 
+        // Label for the image
         labels[i] = uniform_int_distribution(0, classes - 1)(rng);
 
         for(auto& matrix: images[i]) {
             for(auto& row: matrix) {
                 for(auto& val: row) {
                     val = uniform_int_distribution(0, 255)(rng);
+
+                    // Normalise the images to [0, 1]
                     val /= 255;
                 }
             }
@@ -704,7 +791,7 @@ int main() {
 
     int trainable_parameters = 0;
 
-    vector num_output_channels = {16, -1, 32, -1, 64, -1, 64};
+    vector num_output_channels = {16, -1, 32, -1, 64};
 
     int current_height = height;
     int current_width = width;
@@ -712,6 +799,7 @@ int main() {
     Conv2d conv;
 
     for(int i = 0; i < num_output_channels.size(); i++) {
+        // If it's a positive value, add a convolutional layer. Otherwise, add a pooling layer
         if(num_output_channels[i] > 0) {
             conv = Conv2d(i == 0 ? channels : conv.output_channels, num_output_channels[i], pair{3, 3});
             model.addConvPoolLayer(make_shared<Conv2d>(conv));
@@ -724,6 +812,7 @@ int main() {
             current_height = current_height / 2;
             current_width = current_width / 2;
         }
+        // printf("%d %d\n", current_height, current_width);
     }
 
     Dense dense1 = Dense(current_height * current_width * conv.output_channels, 32, "relu");

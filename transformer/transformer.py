@@ -1,6 +1,22 @@
 import time
 import numpy as np
 
+"""
+
+_________________________________________________________________________________________________________
+
+This is the C++ implementation of Transformer.
+
+IDE: PyCharm Professional (Downloaded using my Queen's email)
+
+
+This is entirely for learning. There is no emphasis on test accuracy or optimisation. Implementation
+of Transformer from scratch without resorting to any library such as PyTorch or Tensorflow is the aim here.
+
+_________________________________________________________________________________________________________
+
+"""
+
 np.set_printoptions(linewidth=10000, suppress=True)
 
 
@@ -89,9 +105,6 @@ class Embedding:
 
 
 def positional_encoding(length, depth):
-    """
-    Will come back to it later to understand what's happening
-    """
 
     depth = depth / 2
 

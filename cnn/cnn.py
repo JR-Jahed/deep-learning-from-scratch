@@ -12,7 +12,7 @@ This is the Python implementation of CNN.
 IDE: PyCharm Professional (Downloaded using my Queen's email)
 
 
-This is entirely for learning. There is no emphasis on accuracy or optimisation. Implementation
+This is entirely for learning. There is no emphasis on test accuracy or optimisation. Implementation
 of CNN from scratch without resorting to any library such as PyTorch or Tensorflow is the aim here.
 
 _________________________________________________________________________________________________________
@@ -22,9 +22,13 @@ ________________________________________________________________________________
 def cross_entropy_loss(predictions, labels):
     """
     Compute the cross-entropy loss for integer labels.
-    :param predictions: Softmax probabilities, shape (batch_size, num_classes)
-    :param labels: Integer labels, shape (batch_size,)
-    :return: Loss (scalar)
+
+    @Params
+    predictions: (batch_size, num_classes)
+    labels: (batch_size,)
+
+    @Returns
+    loss: Scalar loss value
     """
     batch_size = predictions.shape[0]
     # Extract the probabilities corresponding to the true labels
@@ -35,9 +39,13 @@ def cross_entropy_loss(predictions, labels):
 def cross_entropy_gradient(predictions, labels):
     """
     Compute the gradient of the cross-entropy loss w.r.t. logits (softmax outputs).
-    :param predictions: Softmax probabilities, shape (batch_size, num_classes)
-    :param labels: Integer labels, shape (batch_size,)
-    :return: Gradient of loss w.r.t. logits, shape (batch_size, num_classes)
+
+    @Params
+    predictions: (batch_size, num_classes)
+    labels: (batch_size,)
+
+    @Returns
+    gradient: (batch_size, num_classes)
     """
     batch_size = predictions.shape[0]
     gradient = predictions.copy()
@@ -76,10 +84,10 @@ class Conv2d:
 
         """
         @Params
-        input: A 4D numpy array (batch_size, input_height, input_width, input_channels)
+        input: (batch_size, input_height, input_width, input_channels)
 
-        @Return
-        output: A 4D numpy array (batch_size, input_height, input_width, output_channels)
+        @Returns
+        output: (batch_size, input_height, input_width, output_channels)
         """
 
         # Save input for backpropagation
@@ -126,17 +134,17 @@ class Conv2d:
         # ReLU Activation: Apply activation and save mask
         self.relu_mask = (output > 0)  # Save mask for backward pass
         output = np.maximum(0, output)  # Apply ReLU
-        return output
+        return output  # shape: (batch_size, input_height, input_width, output_channels)
 
     def backward(self, dL_dout, learning_rate):
 
         """
         @Params
-        dL_dout: A 4D numpy array of shape (batch_size, output_height, output_width, output_channels)
+        dL_dout: (batch_size, output_height, output_width, output_channels)
         learning_rate: A float
 
-        @Return
-        dL_din: A 4D numpy array of shape (batch_size, input_height, input_width, input_channels)
+        @Returns
+        dL_din: (batch_size, input_height, input_width, input_channels)
         """
 
         batch_size, input_height, input_width, input_channels = self.input.shape
@@ -212,7 +220,7 @@ class Conv2d:
         # Update the weights and biases
         self.weights -= learning_rate * dL_dweights
         self.biases -= learning_rate * dL_dbiases
-        return dL_din
+        return dL_din  # shape: (batch_size, input_height, input_width, input_channels)
 
 
 class Dense:
@@ -239,10 +247,10 @@ class Dense:
     def forward(self, input):
         """
         @Params
-        input: A 2D numpy array of shape (batch_size, input_channels)
+        input: (batch_size, input_channels)
 
-        @Return
-        output: A 2D numpy array of shape (batch_size, output_channels).
+        @Returns
+        output: (batch_size, output_channels).
         """
 
         # Save input for backpropagation
@@ -261,11 +269,11 @@ class Dense:
 
         """
         @Params
-        dL_dout: A 2D numpy array of shape (batch_size, output_channels)
-        learning_rate: A float
+        dL_dout: (batch_size, output_channels)
+        learning_rate: float
 
-        @Return
-        dL_din: A 2D numpy array of shape (batch_size, input_channels)
+        @Returns
+        dL_din: (batch_size, input_channels)
         """
 
         batch_size = self.input.shape[0]
@@ -287,10 +295,12 @@ class Dense:
         dL_dweights /= batch_size
         dL_dbiases /= batch_size
 
+        # Update weights and biases
         for oc in range(self.output_channels):
             self.biases[oc] -= learning_rate * dL_dbiases[oc]
             for ic in range(self.input.shape[1]):
                 self.weights[ic][oc] -= learning_rate * dL_dweights[ic][oc]
+
         return dL_din  # Pass gradient to the previous layer
 
 
@@ -316,11 +326,11 @@ class MaxPooling2D:
 
     def forward(self, input):
         """
-        @Param
-        input: is a 4D numpy array of shape  (batch_size, height, width, channels)
+        @Params
+        input: (batch_size, height, width, channels)
 
-        @Return
-        output: a 4D numpy array  (batch_size, height / 2, width / 2, channels)
+        @Returns
+        output: (batch_size, height / 2, width / 2, channels)
         """
 
         # Save input for backpropagation
@@ -350,11 +360,11 @@ class MaxPooling2D:
     def backward(self, dL_dout, learning_rate):
 
         """
-        @Param
-        dL_dout: A 4D numpy array of shape (batch_size, output_height, output_width, channels)
+        @Params
+        dL_dout: (batch_size, output_height, output_width, channels)
 
-        @Return
-        dL_din: A 4D numpy array of shape (batch_size, input_height, input_width, channels)
+        @Returns
+        dL_din: (batch_size, input_height, input_width, channels)
         """
 
         batch_size, input_height, input_width, input_channels = self.input.shape
@@ -362,7 +372,7 @@ class MaxPooling2D:
         # Initialize gradients for input
         dL_din = np.zeros_like(self.input)
 
-        # Calculate gradients and input
+        # Calculate gradients of input
         for i in range(batch_size):
             for h in range(dL_dout.shape[1]):   # Output height
                 for w in range(dL_dout.shape[2]):   # Output width
@@ -435,6 +445,8 @@ class Sequential:
         # Forward pass through convolutional layers
         for layer in self.conv_pool_layers:
             current_input = layer.forward(current_input)
+
+            # Cache the output of each convolutional layer
             self.conv_pool_outputs.append(current_input)
 
         self.last_conv_output_shape = current_input.shape
@@ -447,6 +459,8 @@ class Sequential:
         current_dense_input = np.array(flat_input)
         for dense_layer in self.dense_layers:
             current_dense_input = dense_layer.forward(current_dense_input)
+
+            # Cache the output of each dense layer
             self.dense_outputs.append(current_dense_input)
 
         return current_dense_input
@@ -470,7 +484,7 @@ class Sequential:
     def unflatten(self, flat):
 
         """
-        get the output of the last conv layer
+        get the output of the last convolutional layer
         """
 
         tensor = np.zeros(self.last_conv_output_shape)
@@ -497,9 +511,9 @@ if __name__ == "__main__":
     epochs = 1
     batch_size = 32
 
-    # Create a 4x4 image with random pixel values between 0 and 1
+    # Create images with random pixel values between 0 and 255
     images = np.random.randint(0, 256, (total_images, height, width, channels), dtype=np.uint8)
-    images = images / 255.0  # Normalize the image to [0, 1]
+    images = images / 255.0  # Normalise the images to [0, 1]
 
     # Label for the image
     labels = np.random.randint(0, classes, total_images)
@@ -518,6 +532,7 @@ if __name__ == "__main__":
     current_width = width
 
     for i in range(len(conv_output_channels)):
+        # If it's a positive value, add a convolutional layer. Otherwise, add a pooling layer
         if conv_output_channels[i] > 0:
             conv = Conv2d(input_channels=channels if i == 0 else conv.output_channels, output_channels=conv_output_channels[i])
             model.add_conv_pool_layer(conv)

@@ -10,7 +10,7 @@ This is the Python implementation of RNN.
 IDE: PyCharm Professional (Downloaded using my Queen's email)
 
 
-This is entirely for learning. There is no emphasis on accuracy or optimisation. Implementation
+This is entirely for learning. There is no emphasis on test accuracy or optimisation. Implementation
 of RNN from scratch without resorting to any library such as PyTorch or Tensorflow is the aim here.
 
 _________________________________________________________________________________________________________
