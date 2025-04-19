@@ -304,10 +304,10 @@ class MultiHeadAttention:
         gradient_weights = np.dot(self.concatenated_output.reshape(-1, self.d_model).T, gradient_output.reshape(-1, self.d_model))
 
         # Gradient with respect to the concatenated output
-        gradient_concatenated_output = np.dot(gradient_output, self.W.T)
+        gradient_concatenated_output = np.dot(gradient_output, self.W.T)  # shape: (batch_size, max_sequence_length, d_model)
 
         # Split gradient into each head's gradient
-        gradient_heads = np.split(gradient_concatenated_output, self.n_heads, axis=-1)  # shape (batch_size, max_sequence_length, head_dim)
+        gradient_heads = np.split(gradient_concatenated_output, self.n_heads, axis=-1)  # shape: (batch_size, max_sequence_length, head_dim)
 
         gradient_query = 0
         gradient_key = 0
@@ -442,13 +442,13 @@ class Dense:
 
 class FeedForward:
     def __init__(self, d_model, d_ff):
-        self.relu_mask = None
         self.d_model = d_model
         self.d_ff = d_ff
         self.dense1 = Dense(d_model, d_ff)
         self.dense2 = Dense(d_ff, d_model)
         self.add = Add()
         self.layer_normalisation = LayerNormalisation(d_model)
+        self.relu_mask = None
 
     def forward(self, x):
         """
