@@ -21,6 +21,15 @@ np.set_printoptions(linewidth=1000, suppress=True)
 
 
 def cross_entropy_loss(predictions, labels):
+    """
+    @Params
+    predictions: (batch_size, num_classes)
+    labels: (batch_size)
+
+    @Returns
+    loss: scalar
+    """
+
     batch_size = predictions.shape[0]
     correct_probs = predictions[np.arange(batch_size), labels]
     loss = -np.sum(np.log(correct_probs + 1e-9))  # Avoid log(0)
@@ -28,6 +37,15 @@ def cross_entropy_loss(predictions, labels):
 
 
 def cross_entropy_gradient(predictions, labels):
+    """
+    @Params
+    predictions: (batch_size, num_classes)
+    labels: (batch_size)
+
+    @Returns
+    gradient: (batch_size, num_classes)
+    """
+
     batch_size = predictions.shape[0]
     gradient = predictions.copy()
     gradient[np.arange(batch_size), labels] -= 1
@@ -50,23 +68,35 @@ class Embedding:
         self.input = None
 
     def forward(self, x):
-        """Fetch embeddings for a batch of token sequences."""
+        """
+        Fetch embeddings for a batch of token sequences.
+
+        @Params
+        x: (batch_size, sequence_length)
+
+        @Returns
+        embeddings: (batch_size, sequence_length, embedding_dim)
+        """
+
         self.input = x  # Shape: (batch_size, sequence_length)
         return self.embeddings[x]  # Shape: (batch_size, sequence_length, embedding_dim)
 
-    def backward(self, grad, learning_rate):
+    def backward(self, gradient_output, learning_rate):
         """
         Update embedding vectors using gradient.
-        grad has shape (batch_size, sequence_length, embedding_dim).
+
+        @Params
+        gradient_output: (batch_size, sequence_length, embedding_dim).
+        learning_rate: float
         """
-        batch_size, sequence_length, _ = grad.shape
+        batch_size, sequence_length, _ = gradient_output.shape
         learning_rate *= batch_size
         unique_tokens = np.unique(self.input)  # Get unique token indices
 
         # Accumulate gradients for each unique token
         for token in unique_tokens:
             mask = self.input == token  # Mask for token occurrences
-            self.embeddings[token] -= learning_rate * np.sum(grad[mask], axis=0)
+            self.embeddings[token] -= learning_rate * np.sum(gradient_output[mask], axis=0)
 
 
 class SimpleRNN:
@@ -77,64 +107,126 @@ class SimpleRNN:
 
         limit = np.sqrt(6 / (input_size + hidden_size))
         self.W_xh = np.random.uniform(-limit, limit, (hidden_size, input_size))
-        self.W_hh = orthogonal_init(hidden_size)
+        self.W_hh = orthogonal_init(hidden_size)  # Shape: (hidden_size, hidden_size)
         self.b_h = np.zeros((hidden_size, 1))
 
     def forward(self, x):
         """
-        x shape: (batch_size, seq_length, input_size)
+        @Params
+        x: (batch_size, max_sequence_length, input_size)
+
+        @Returns
+        output: (batch_size, max_sequence_length, hidden_size) if return_sequences else (batch_size, hidden_size)
         """
-        batch_size, seq_length, _ = x.shape
+        batch_size, max_sequence_length, _ = x.shape
         h = np.zeros((batch_size, self.hidden_size, 1))
         self.inputs = x
         self.h_states = []
 
-        for t in range(seq_length):
+        for t in range(max_sequence_length):
+            # Select one timestep at a time from the input sequence
             x_t = x[:, t, :].reshape(batch_size, self.input_size, 1)  # Shape: (batch_size, input_size, 1)
-            h = np.tanh(np.dot(self.W_xh, x_t).squeeze(2) + np.dot(self.W_hh, h).squeeze(2) + self.b_h)
+
+            # Compute the hidden state for this timestep and drop the last dimension
+            # The last dimension must be dropped to make the shape (hidden_size, batch_size) to be able
+            # to add biases, which has shape (hidden_size, 1).
+
+            h = np.tanh(np.dot(self.W_xh, x_t).squeeze(2) + np.dot(self.W_hh, h).squeeze(2) + self.b_h)  # Shape: (hidden_size, batch_size)
             h = np.expand_dims(h.T, -1)  # Shape: (batch_size, hidden_size, 1)
             self.h_states.append(h)
 
-        self.h_states = np.array(self.h_states)  # Shape: (seq_length, batch_size, hidden_size, 1)
-        self.h_states = np.swapaxes(self.h_states, 0, 1)  # Shape: (batch_size, seq_length, hidden_size, 1)
+        self.h_states = np.array(self.h_states)  # Shape: (max_sequence_length, batch_size, hidden_size, 1)
 
-        return self.h_states.squeeze(3) if self.return_sequences else self.h_states[:, -1, :, 0]
+        # Swap axes so that the first dimension corresponds to individual sequences in the batch
+        self.h_states = np.swapaxes(self.h_states, 0, 1)  # Shape: (batch_size, max_sequence_length, hidden_size, 1)
+
+        # Drop the last dimension to get the final output for each sequence in the batch
+        output = self.h_states.squeeze(3)  # Shape: (batch_size, max_sequence_length, hidden_size)
+
+        if self.return_sequences is False:
+            # If return_sequences is False, then only the output for the last timestep is returned.
+            output = output[:, -1, :]  # Shape: (batch_size, hidden_size)
+
+        return output  # Shape: (batch_size, max_sequence_length, hidden_size) if return_sequences else (batch_size, hidden_size)
 
     def backward(self, dL_dh_last, learning_rate):
         """
-        dL_dh_last shape: (batch_size, seq_length, hidden_size) if return_sequences else (batch_size, hidden_size)
+        @Params
+        dL_dh_last shape: (batch_size, max_sequence_length, hidden_size) if return_sequences else (batch_size, hidden_size)
+
+        @Returns
+        dL_dx: (batch_size, max_sequence_length, input_size)
         """
-        batch_size, seq_length, _ = self.inputs.shape
+        batch_size, max_sequence_length, _ = self.inputs.shape
         dW_xh = np.zeros_like(self.W_xh)
         dW_hh = np.zeros_like(self.W_hh)
         db = np.zeros_like(self.b_h)
 
         dL_dx = np.zeros_like(self.inputs)
-        dL_dh_next = np.zeros((batch_size, self.hidden_size))  # Gradient of next time step
 
         if self.return_sequences:
-            for t in reversed(range(seq_length)):
+
+            # dL_dh_next is the gradient of the hidden state of the next time step. Initially, it is zero since
+            # there's no next time step for the last one.
+
+            # If return_sequences is True, then the hidden state of each time step affected the final output
+            # twice, once by being passed to the next layer and once by going through the next time step.
+            # Therefore, the gradients of both these outputs should be summed to obtain the gradient of a
+            # particular time step.
+
+            dL_dh_next = np.zeros((batch_size, self.hidden_size))
+
+            for t in reversed(range(max_sequence_length)):
+
+                # Get the gradient of the loss for this time step by summing the gradient of
+                # output and the gradient of the next time step.
                 dL_dh_t = dL_dh_last[:, t, :] + dL_dh_next  # Shape: (batch_size, hidden_size)
+
+                # Gradient of the input of activation function
                 dtanh = (1 - self.h_states[:, t, :, 0] ** 2) * dL_dh_t  # Shape: (batch_size, hidden_size)
 
-                dW_xh += np.dot(dtanh.T, self.inputs[:, t, :])
-                dW_hh += np.dot(dtanh.T, self.h_states[:, t - 1, :, 0] if t > 0 else np.zeros_like(self.h_states[:, t, :, 0]))
-                db += np.sum(dtanh, axis=0, keepdims=True).T
+                # Gradient of the input to hidden weights
+                dW_xh += np.dot(dtanh.T, self.inputs[:, t, :])  # Shape: (hidden_size, input_size)
 
+                # Gradient of the hidden to hidden weights
+                dW_hh += np.dot(dtanh.T, self.h_states[:, t - 1, :, 0] if t > 0 else np.zeros_like(self.h_states[:, t, :, 0]))  # Shape: (hidden_size, hidden_size)
+
+                # Gradient of the biases
+                db += np.sum(dtanh, axis=0, keepdims=True).T  # Shape: (hidden_size, 1)
+
+                # Gradient of input
                 dL_dx[:, t, :] = np.dot(dtanh, self.W_xh)  # Shape: (batch_size, input_size)
+
+                # Gradient of hidden state for this time step which becomes next time step for the previous time step
                 dL_dh_next = np.dot(dtanh, self.W_hh)  # Shape: (batch_size, hidden_size)
         else:
+            # If return_sequences is False, then only the gradient of the last time step is used.
+            # Because during forward pass, the hidden state of each time step before the last one
+            # was used to calculate the hidden state of the next time step and affected the final
+            # output through the next time step. But it didn't directly affect the output of next
+            # layer as it wasn't passed to the next layer.
+
             dL_dh_t = dL_dh_last  # Shape: (batch_size, hidden_size)
-            for t in reversed(range(seq_length)):
+            for t in reversed(range(max_sequence_length)):
+                # Gradient of the input of activation function
                 dtanh = (1 - self.h_states[:, t, :, 0] ** 2) * dL_dh_t  # Shape: (batch_size, hidden_size)
 
-                dW_xh += np.dot(dtanh.T, self.inputs[:, t, :])
-                dW_hh += np.dot(dtanh.T, self.h_states[:, t - 1, :, 0] if t > 0 else np.zeros_like(self.h_states[:, t, :, 0]))
-                db += np.sum(dtanh, axis=0, keepdims=True).T
+                # Gradient of the input to hidden weights
+                dW_xh += np.dot(dtanh.T, self.inputs[:, t, :])  # Shape: (hidden_size, input_size)
 
+                # Gradient of the hidden to hidden weights
+                dW_hh += np.dot(dtanh.T, self.h_states[:, t - 1, :, 0] if t > 0 else np.zeros_like(self.h_states[:, t, :, 0]))  # Shape: (hidden_size, hidden_size)
+
+                # Gradient of the biases
+                db += np.sum(dtanh, axis=0, keepdims=True).T  # Shape: (hidden_size, 1)
+
+                # Gradient of input
                 dL_dx[:, t, :] = np.dot(dtanh, self.W_xh)  # Shape: (batch_size, input_size)
+
+                # Gradient of hidden state for this time step
                 dL_dh_t = np.dot(dtanh, self.W_hh)  # Shape: (batch_size, hidden_size)
 
+        # Update parameters
         self.W_xh -= learning_rate * dW_xh
         self.W_hh -= learning_rate * dW_hh
         self.b_h -= learning_rate * db
@@ -158,36 +250,36 @@ class Dense:
         self.output = self.activation_function(z)  # Shape: (hidden_size, batch_size)
         return self.output.T  # Shape: (batch_size, hidden_size)
 
-    def backward(self, grad, learning_rate):
+    def backward(self, gradient_output, learning_rate):
         """
         Compute gradients and update weights.
-        grad has shape (batch_size, hidden_size).
+
+        @Params
+        gradient_output: (batch_size, hidden_size).
+
+        @Returns
+        grad_input: (batch_size, input_size)
         """
-        batch_size = grad.shape[0]
+        batch_size = gradient_output.shape[0]
         learning_rate *= batch_size
 
-        # Reshape grad for matrix multiplication
-        dz = grad.T * self.activation_derivative(self.output)  # Shape: (hidden_size, batch_size)
-        dW = np.dot(dz, self.input) / batch_size  # Averaging over batch
-        db = np.sum(dz, axis=1, keepdims=True) / batch_size
+        dW = np.dot(gradient_output.T, self.input) / batch_size  # Shape: (hidden_size, input_size)
+        db = np.sum(gradient_output.T, axis=1, keepdims=True) / batch_size
+
+        gradient_input = np.dot(self.W.T, gradient_output.T).T  # Shape: (batch_size, input_size)
 
         # Update parameters
         self.W -= learning_rate * dW
         self.b -= learning_rate * db
 
         # Compute gradient for previous layer
-        return np.dot(self.W.T, dz).T  # Shape: (batch_size, input_size)
+        return gradient_input
 
     def activation_function(self, z):
         if self.activation == 'softmax':
             exp_z = np.exp(z - np.max(z, axis=0, keepdims=True))
             return exp_z / np.sum(exp_z, axis=0, keepdims=True)
         return z
-
-    def activation_derivative(self, a):
-        if self.activation == 'softmax':
-            return a * (1 - a)
-        return np.ones_like(a)
 
 
 class Sequential:
