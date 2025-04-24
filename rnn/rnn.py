@@ -125,7 +125,7 @@ class SimpleRNN:
 
         for t in range(max_sequence_length):
             # Select one timestep at a time from the input sequence
-            x_t = x[:, t, :].reshape(batch_size, self.input_size, 1)  # Shape: (batch_size, input_size, 1)
+            x_t = np.expand_dims(x[:, t, :], axis=-1)  # Shape: (batch_size, input_size, 1)
 
             # Compute the hidden state for this timestep and drop the last dimension
             # The last dimension must be dropped to make the shape (hidden_size, batch_size) to be able
