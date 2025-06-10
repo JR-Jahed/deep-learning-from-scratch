@@ -50,3 +50,22 @@ This repository demonstrates:
 * Ability to implement complex systems **from first principles**
 * Proficiency in both **high-level (Python)** and **low-level (C++)** languages
 * Clear understanding of **gradient flow**, **optimisation**, and **architecture-specific quirks**
+
+## 💬 Chat with ChatGPT During Development
+
+I recorded my conversations with ChatGPT while implementing each architecture. These screen recordings capture:
+
+* My **thought process**
+* Questions I asked
+* How I debugged and refined the code
+* When and why I chose certain approaches
+
+These chats reflect how I reason through problems and seek clarity while building complex systems from scratch.
+
+#### Recordings:
+
+Google Drive links
+
+* [Convolutional Neural Network](https://drive.google.com/file/d/1w7rWWJZArWKC4kmjgELlcj9vacIqO7AT/view?usp=drive_link)
+* [Recurrent Neural Network](https://drive.google.com/file/d/1PfsBpNzq7PcNVmFOoxgZ1M0S6XZH_SVo/view?usp=drive_link)
+* [Transformer](https://drive.google.com/file/d/1xbDsGyZbDak8zwwl6fPTgebaPto5G3mI/view?usp=drive_link)
